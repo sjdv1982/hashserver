@@ -61,7 +61,7 @@ try:
 
     t = time.time()
     status, output = request(other_checksum)
-    assert status == 404, status
+    assert status == 404, (status, output)
     assert output == "Not found", output
     assert time.time() - t < 1, time.time() - t
 

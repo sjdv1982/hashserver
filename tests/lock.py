@@ -48,7 +48,7 @@ time.sleep(1)
 try:
     t = time.time()
     status, output = request(lorem_checksum)
-    assert status == 404, status
+    assert status == 404, (status, output)
     assert output == "Not found", output
     assert time.time() - t < 5
 
@@ -57,7 +57,7 @@ try:
 
     t = time.time()
     status, output = request(lorem_checksum)
-    assert status == 404, status
+    assert status == 404, (status, output)
     assert output == "Not found", output
     assert time.time() - t > 5, time.time() - t
 
@@ -66,7 +66,7 @@ try:
 
     t = time.time()
     status, output = request(lorem_checksum)
-    assert status == 400, status
+    assert status == 400, (status, output)
     try:
         output = json.loads(output)
     except Exception:
@@ -92,7 +92,7 @@ try:
 
     t = time.time()
     status, output = request(lorem_checksum)
-    assert status == 200, status
+    assert status == 200, (status, output)
     assert output == lorem, output
     assert time.time() - t > 4, time.time() - t
 

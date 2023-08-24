@@ -4,6 +4,7 @@ import argparse
 from typing import Union
 
 from fastapi import FastAPI, Path
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
 from fastapi.exceptions import RequestValidationError
 
@@ -75,11 +76,9 @@ async def validation_exception_handler(request, exc):
         content={"message": "Invalid data", "exception": inner_exc},
     )
 
-
 @app.exception_handler(FileNotFoundError)
 async def filenotfound_exception_handler(request, exc):
     return Response(status_code=404, content="Not found")
-
 
 @app.exception_handler(RuntimeError)
 async def validation_exception_handler(request, exc):
@@ -91,11 +90,18 @@ async def validation_exception_handler(request, exc):
 
 @app.get("/{checksum}")
 async def get_file(checksum: Annotated[Checksum, Path()]) -> HashFileResponse:
+    print("CDS!", checksum)
     ResponseClass = VaultHashFileResponse if is_vault else HashFileResponse
     response = ResponseClass(directory=directory, checksum=checksum)
     response.lock_timeout = lock_timeout
     return response
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 if as_commandline_tool:
     import uvicorn

@@ -35,19 +35,19 @@ time.sleep(1)
 try:
     t = time.time()
     status, output = request(other_checksum)
-    assert status == 404, status
+    assert status == 404, (status, output)
     assert output == "Not found", output
     assert time.time() - t < 1, time.time() - t
 
     t = time.time()
     status, output = request(hello_checksum)
-    assert status == 200, status
+    assert status == 200, (status, output)
     assert output == "Hello world!\n", output
     assert time.time() - t < 1, time.time() - t
 
     t = time.time()
     status, output = request(bad_checksum1)
-    assert status == 400, status
+    assert status == 400, (status, output)
     assert time.time() - t < 1, time.time() - t
     try:
         output = json.loads(output)
@@ -69,7 +69,7 @@ try:
 
     t = time.time()
     status, output = request(bad_checksum2)
-    assert status == 400, status
+    assert status == 400, (status, output)
     assert time.time() - t < 1, time.time() - t
     try:
         output = json.loads(output)
