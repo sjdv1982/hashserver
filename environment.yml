@@ -1,0 +1,7 @@
+name: hashserver
+channels:
+  - conda-forge
+dependencies:
+  - fastapi
+  - uvicorn 
+  - uvicorn-standard
