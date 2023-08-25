@@ -1,13 +1,14 @@
 import os
 import sys
 import argparse
-from typing import Union
+from typing import Union, List
 from hashlib import sha3_256
 
-from fastapi import FastAPI, Path, Request
+from fastapi import FastAPI, Path, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
 from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 
 from functools import partial
 
@@ -123,6 +124,7 @@ app = FastAPI()
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
     inner_exc = exc.args[0][0]
+    inner_exc = jsonable_encoder(inner_exc)
     inner_exc.pop("ctx", None)
     return JSONResponse(
         status_code=400,
@@ -142,6 +144,28 @@ async def runtime_exception_handler(request, exc):
         content={"message": f"{exc}"},
     )
 
+async def until_no_lock(lockpath):
+    while 1:
+        try:
+            lock_stat_result = await anyio.to_thread.run_sync(os.stat, lockpath)
+        except FileNotFoundError:
+            break
+        lock_mtime = lock_stat_result.st_mtime
+        if time.time() - lock_mtime > lock_timeout:
+            break
+        await anyio.sleep(1)
+    
+
+@app.get("/has")
+async def has_buffers(checksums:Annotated[List[Checksum], Body()]) -> JSONResponse:
+    global_lockpath = os.path.join(directory, ".LOCK")
+    await until_no_lock(global_lockpath)
+    
+    result = []
+    for checksum in checksums:
+        path = os.path.join(directory, checksum)
+        result.append(os.path.exists(path))
+    return result
 
 @app.get("/{checksum}")
 async def get_file(checksum: Annotated[Checksum, Path()]) -> HashFileResponse:
@@ -164,15 +188,7 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
     global_lockpath = os.path.join(directory, ".LOCK")
     file_lockpath = path + ".LOCK"
     for lockpath in (global_lockpath, file_lockpath):
-        while 1:
-            try:
-                lock_stat_result = await anyio.to_thread.run_sync(os.stat, lockpath)
-            except FileNotFoundError:
-                break
-            lock_mtime = lock_stat_result.st_mtime
-            if time.time() - lock_mtime > lock_timeout:
-                break
-            await anyio.sleep(1)
+        await until_no_lock(lockpath)
     for lockpath in (global_lockpath, file_lockpath):
         try:
             pathlib.Path(lockpath).unlink()

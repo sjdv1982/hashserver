@@ -28,13 +28,14 @@ The hash server can be run as a command-line tool. In that case, the hash server
 Alternatively, the hash server can run under a ASGI runner such as `uvicorn`.
 In that case, the hash server parameters must be first defined as environment variables. These variables are: HASHSERVER_DIRECTORY and (optionally) HASHSERVER_LOCK_TIMEOUT and HASHSERVER_WRITEABLE. The hash server is then launched by the ASGI runner, e.g. `uvicorn hashserver:app --port 1234`
 
+The hash server has an access point "/has" where a list of checksums can be provided as the "checksums" parameter, e.g. `import requests; requests.get("http://localhost:8000/has", json=checksums)` in a Python client. The server returns a JSON list of booleans of the same length, indicating for each checksum if it is present or not.
+
 ### Using Docker
 
 TODO
 
 ## TODO
 
-- PUT server
 - Docker compose file
 - Automatic continuous integration
 
