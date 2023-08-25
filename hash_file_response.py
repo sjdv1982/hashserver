@@ -41,6 +41,7 @@ class HashFileResponse(FileResponse):
     File has the same name as checksum."""
 
     lock_timeout = 120
+    chunk_size = 640 * 1024
 
     def __init__(
         self,

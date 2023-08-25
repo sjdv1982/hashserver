@@ -30,7 +30,7 @@ def calculate_checksum(buffer):
 
 
 DEFAULT_LOCK_TIMEOUT = 120.0
-CHUNK_SIZE = 64 * 1024  # for now, hardcoded
+CHUNK_SIZE = 640 * 1024  # for now, hardcoded
 
 env = os.environ
 as_commandline_tool = True
