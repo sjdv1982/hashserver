@@ -29,6 +29,9 @@ if "HASHSERVER_DIRECTORY" in os.environ:
         lock_timeout = float(os.environ["HASHSERVER_LOCK_TIMEOUT"])
     as_commandline_tool = False
 else:
+    if len(sys.argv) and sys.argv[0].find("uvicorn") > -1 and not os.path.isdir(sys.argv[0]):
+        print("Running hashserver under uvicorn CLI requires at least HASHSERVER_DIRECTORY to be defined", file=sys.stderr)
+        exit(1)
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "directory",
@@ -43,6 +46,13 @@ else:
         type=float,
         help="Time-out after which lock files are broken",
         default=DEFAULT_LOCK_TIMEOUT,
+    )
+
+    parser.add_argument(
+        "--port",
+        type=int,
+        help="Network port",
+        default=8000,
     )
 
     args = parser.parse_args()
@@ -90,7 +100,6 @@ async def validation_exception_handler(request, exc):
 
 @app.get("/{checksum}")
 async def get_file(checksum: Annotated[Checksum, Path()]) -> HashFileResponse:
-    print("CDS!", checksum)
     ResponseClass = VaultHashFileResponse if is_vault else HashFileResponse
     response = ResponseClass(directory=directory, checksum=checksum)
     response.lock_timeout = lock_timeout
@@ -106,7 +115,7 @@ app.add_middleware(
 if as_commandline_tool:
     import uvicorn
 
-    uvicorn.run(app)
+    uvicorn.run(app, port=args.port)
 else:
     # uvicorn (or some other ASGI launcher) will take care of it
     pass
