@@ -4,7 +4,7 @@ import argparse
 from typing import Union
 from hashlib import sha3_256
 
-from fastapi import FastAPI, Path
+from fastapi import FastAPI, Path, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -23,7 +23,6 @@ import time
 Checksum = Annotated[
     Union[str, bytes], BeforeValidator(partial(parse_checksum, as_bytes=False))
 ]
-
 
 def calculate_checksum(buffer):
     """Return SHA3-256 checksum"""
@@ -152,7 +151,9 @@ async def get_file(checksum: Annotated[Checksum, Path()]) -> HashFileResponse:
     return response
 
 
-async def put_file(checksum: Annotated[Checksum, Path()], buffer: bytes) -> Response:
+
+async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Response:
+    buffer = await rq.body()
     buffer_checksum = calculate_checksum(buffer)
     if buffer_checksum != checksum:
         return Response(status_code=400, content="Incorrect checksum")

@@ -17,8 +17,7 @@ def put(buffer: bytes):
     assert isinstance(buffer, bytes)
     checksum = calculate_checksum(buffer)
     url = hashserver_url + "/" + checksum
-    params = {"buffer": buffer}
-    response = requests.put(url, params=params)
+    response = requests.put(url, data=buffer)
     return response.status_code, response.content
 
 
@@ -75,19 +74,4 @@ status_code, response = bugged_put2(buffer1)
 assert status_code == 400 and response == b"Incorrect checksum", (status_code, response)
 
 status_code, response = bugged_put3(buffer1)
-assert status_code == 400, (status_code, response)
-try:
-    response = json.loads(response.decode())
-    response["exception"].pop("url")
-except Exception:
-    raise AssertionError((status_code, response))
-refe_response = {
-    "message": "Invalid data",
-    "exception": {
-        "type": "missing",
-        "loc": ["query", "buffer"],
-        "msg": "Field required",
-        "input": None,
-    },
-}
-assert response == refe_response, response
+assert status_code == 400 and response == b"Incorrect checksum", (status_code, response)

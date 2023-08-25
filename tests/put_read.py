@@ -27,8 +27,7 @@ def get(checksum):
 def put(buffer: bytes):
     assert isinstance(buffer, bytes)
     checksum = calculate_checksum(buffer)
-    params = {"buffer": buffer}
-    response = requests.put(f"http://localhost:8000/{checksum}", params=params)
+    response = requests.put(f"http://localhost:8000/{checksum}", data=buffer)
     return response.status_code, response.content
 
 
