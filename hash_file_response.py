@@ -78,7 +78,9 @@ class HashFileResponse(FileResponse):
 
             self.set_stat_headers(stat_result)
         except FileNotFoundError:
-            raise FileNotFoundError(f"File at path {self.path} does not exist.")
+            raise FileNotFoundError(
+                f"File at path {self.path} does not exist."
+            ) from None
         else:
             mode = stat_result.st_mode
             if not stat.S_ISREG(mode):
@@ -86,7 +88,7 @@ class HashFileResponse(FileResponse):
         return stat_result
 
     async def until_no_lock(self):
-        lockpaths = [os.path.join(self.directory, ".LOCK")] 
+        lockpaths = [os.path.join(self.directory, ".LOCK")]
         if self.path is not None:
             lockpaths.append(self.path + ".LOCK")
         for lockpath in lockpaths:
@@ -101,15 +103,16 @@ class HashFileResponse(FileResponse):
                 await anyio.sleep(1)
 
     async def calculate_checksum(self):
-        hash = sha3_256()
+        """Return SHA3-256 checksum"""
+        checksum = sha3_256()
         async with await anyio.open_file(self.path, mode="rb") as file:
             more_body = True
             while more_body:
                 chunk = await file.read(self.chunk_size)
-                hash.update(chunk)
+                checksum.update(chunk)
                 more_body = len(chunk) == self.chunk_size
 
-            checksum = hash.digest().hex()
+            checksum = checksum.digest().hex()
         return checksum
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -205,7 +208,6 @@ class VaultHashFileResponse(HashFileResponse):
             if self.path == last_path:
                 break
             last_path = self.path
-
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         try:

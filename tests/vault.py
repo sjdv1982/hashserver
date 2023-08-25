@@ -34,7 +34,6 @@ server = subprocess.Popen(
 time.sleep(1)
 
 try:
-
     t = time.time()
     status, output = request(checksum1)
     assert status == 200, (status, output)
