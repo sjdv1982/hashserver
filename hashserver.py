@@ -136,7 +136,7 @@ async def filenotfound_exception_handler(request, exc):
 
 
 @app.exception_handler(RuntimeError)
-async def validation_exception_handler(request, exc):
+async def runtime_exception_handler(request, exc):
     return JSONResponse(
         status_code=400,
         content={"message": f"{exc}"},
