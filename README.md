@@ -8,7 +8,7 @@ The server handles HTTP GET requests, and optionally HTTP PUT requests.
 
 The directory containing the buffers may be organized as a Seamless vault directory, containing subdirectories for (in)dependent and big/small buffers.
 
-The same buffer directory can be simultaneously accessed by a GET server, a PUT server and/or a Seamless `ctx.save_vault` operation, since lock files are used to detect/indicate files that are being written.
+The same buffer directory can be simultaneously accessed by a one or more hashservers and/or a Seamless `ctx.save_vault` operation, since lock files are used to detect/indicate files that are being written.
 
 ## Launching a service
 
