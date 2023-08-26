@@ -1,0 +1,10 @@
+services:
+  hashserver:
+    build: .
+    ports:
+      - "${HASHSERVER_PORT}:8000"
+    environment:
+      - HASHSERVER_HOST
+      - HASHSERVER_WRITABLE
+    volumes:
+      - ${HASHSERVER_DIRECTORY}:/buffers

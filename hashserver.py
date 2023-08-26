@@ -44,7 +44,7 @@ if "HASHSERVER_DIRECTORY" in os.environ:
     writable = False
     if "HASHSERVER_WRITABLE" in os.environ:
         writable = os.environ["HASHSERVER_WRITABLE"]
-        assert writable.lower() in ("true", "false", "0", "1"), writable
+        assert writable.lower() in ("true", "false", "0", "1", ""), writable
         if writable.lower() in ("true", "1"):
             writable = True
     as_commandline_tool = False
