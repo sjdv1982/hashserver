@@ -1,10 +1,12 @@
 services:
   hashserver:
     build: .
+    user: ${HASHSERVER_USER_ID:-0}:${HASHSERVER_GROUP_ID:-0}
     ports:
-      - "${HASHSERVER_PORT:?}:8000"
+      - "${HASHSERVER_PORT:?}:${HASHSERVER_PORT:?}"
     environment:
       - HASHSERVER_HOST=${HASHSERVER_HOST:?}
+      - HASHSERVER_PORT=${HASHSERVER_PORT:?}
       - HASHSERVER_WRITABLE
     volumes:
       - ${HASHSERVER_DIRECTORY:?}:/buffers

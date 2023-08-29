@@ -18,7 +18,7 @@ The same buffer directory can be simultaneously accessed by a one or more hashse
 
 `conda activate hashserver`
 
-In order to run tests, also install `requests`: 
+In order to run tests, also install `requests`:
 `pip install requests`
 
 Run `python hashserver.py -h` for an overview of all hash server parameters.
@@ -39,6 +39,9 @@ The hash server has an access point "/has" where a list of checksums can be prov
  export HASHSERVER_WRITABLE=1
  docker compose up
 ```
+
+It is possible to detach by adding `-d` to the `docker compose` command.
+It is possible to define the Docker container's user ID and group ID using HASHSERVER_USER_ID and HASHSERVER_GROUP_ID. Both are 0 (root) by default, which means that sudo rights are needed to delete buffer files.
 
 ## API
 
