@@ -195,6 +195,7 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
         except FileNotFoundError:
             pass
 
+    ok = False
     try:
         lock_touch_time = None
         async with await anyio.open_file(path, mode="wb") as file:
@@ -206,9 +207,14 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
                 await file.write(chunk)
             buffer_checksum = cs_stream.hexdigest()
             if buffer_checksum != checksum:
-                pathlib.Path(path).unlink()
                 return Response(status_code=400, content="Incorrect checksum")
+            ok = True
     finally:
+        if not ok:
+            try:
+                pathlib.Path(path).unlink()
+            except FileNotFoundError:
+                pass
         try:
             pathlib.Path(file_lockpath).unlink()
         except FileNotFoundError:
