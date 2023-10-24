@@ -29,6 +29,8 @@ def calculate_checksum(buffer):
     """Return SHA3-256 checksum"""
     return sha3_256(buffer).digest().hex()
 
+def calculate_checksum_stream():
+    return sha3_256()
 
 DEFAULT_LOCK_TIMEOUT = 120.0
 CHUNK_SIZE = 640 * 1024  # for now, hardcoded
@@ -177,10 +179,8 @@ async def get_file(checksum: Annotated[Checksum, Path()]) -> HashFileResponse:
 
 
 async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Response:
-    buffer = await rq.body()
-    buffer_checksum = calculate_checksum(buffer)
-    if buffer_checksum != checksum:
-        return Response(status_code=400, content="Incorrect checksum")
+    
+    cs_stream = calculate_checksum_stream()
 
     path = os.path.join(directory, checksum)
 
@@ -198,12 +198,16 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
     try:
         lock_touch_time = None
         async with await anyio.open_file(path, mode="wb") as file:
-            for pos in range(0, len(buffer), CHUNK_SIZE):
-                chunk = buffer[pos : pos + CHUNK_SIZE]
+            async for chunk in rq.stream():
+                cs_stream.update(chunk)
                 if lock_touch_time is None or time.time() - lock_touch_time > 10:
                     pathlib.Path(file_lockpath).touch()
                     lock_touch_time = time.time()
                 await file.write(chunk)
+            buffer_checksum = cs_stream.hexdigest()
+            if buffer_checksum != checksum:
+                pathlib.Path(path).unlink()
+                return Response(status_code=400, content="Incorrect checksum")
     finally:
         try:
             pathlib.Path(file_lockpath).unlink()
