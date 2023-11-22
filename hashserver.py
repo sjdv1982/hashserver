@@ -179,7 +179,6 @@ async def get_file(checksum: Annotated[Checksum, Path()]) -> HashFileResponse:
 
 
 async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Response:
-    
     cs_stream = calculate_checksum_stream()
 
     path = os.path.join(directory, checksum)
@@ -207,6 +206,7 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
                 await file.write(chunk)
             buffer_checksum = cs_stream.hexdigest()
             if buffer_checksum != checksum:
+                print("Incorrect checksum", checksum)
                 return Response(status_code=400, content="Incorrect checksum")
             ok = True
     finally:
