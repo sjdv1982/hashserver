@@ -39,7 +39,7 @@ env = os.environ
 as_commandline_tool = True
 
 if "HASHSERVER_DIRECTORY" in os.environ:
-    directory = os.environ["HASHSERVER_DIRECTORY"]
+    directory = os.environ["HASHSERVER_DIRECTORY"]    
     lock_timeout = DEFAULT_LOCK_TIMEOUT
     if "HASHSERVER_LOCK_TIMEOUT" in os.environ:
         lock_timeout = float(os.environ["HASHSERVER_LOCK_TIMEOUT"])
@@ -71,6 +71,15 @@ The directory may be organized as a Seamless vault directory,
 containing subdirectories for (in)dependent and big/small buffers.""",
     )
     parser.add_argument(
+        "--extra-dirs",
+        help="""Extra directories where read-only buffers are located.
+
+This must be a list of directories separated by semi-colons (;).
+Seamless vault directories are not supported.
+If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""",
+    )
+
+    parser.add_argument(
         "--lock-timeout",
         type=float,
         help="Time-out after which lock files are broken",
@@ -101,6 +110,11 @@ containing subdirectories for (in)dependent and big/small buffers.""",
     directory = args.directory
     lock_timeout = args.lock_timeout
     writable = args.writable
+    extra_dirs = args.extra_dirs
+    if not extra_dirs:
+        extra_dirs = os.environ.get("HASHSERVER_EXTRA_DIRS")
+    if extra_dirs:
+        extra_dirs = [d.strip() for d in extra_dirs.split(";")]
 
 if not os.path.exists(directory):
     raise FileExistsError(f"Directory '{directory}' does not exist")
@@ -166,19 +180,30 @@ async def has_buffers(checksums:Annotated[List[Checksum], Body()]) -> JSONRespon
     result = []
     for checksum in checksums:
         path = os.path.join(directory, checksum)
-        result.append(os.path.exists(path))
+        if os.path.exists(path):
+            result.append(True)
+        else:
+            for extra_dir in extra_dirs:
+                path = os.path.join(extra_dir, checksum)
+                if os.path.exists(path):
+                    result.append(True)
+                    break
+            else:
+                result.append(False)
+
     return result
 
 @app.get("/{checksum}")
 async def get_file(checksum: Annotated[Checksum, Path()]) -> HashFileResponse:
     ResponseClass = VaultHashFileResponse if is_vault else HashFileResponse
-    response = ResponseClass(directory=directory, checksum=checksum)
+    response = ResponseClass(directory=directory, checksum=checksum, extra_dirs=extra_dirs)
     response.lock_timeout = lock_timeout
     return response
 
 
 
 async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Response:
+    
     cs_stream = calculate_checksum_stream()
 
     path = os.path.join(directory, checksum)
@@ -206,7 +231,6 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
                 await file.write(chunk)
             buffer_checksum = cs_stream.hexdigest()
             if buffer_checksum != checksum:
-                print("Incorrect checksum", checksum)
                 return Response(status_code=400, content="Incorrect checksum")
             ok = True
     finally:

@@ -54,6 +54,7 @@ class HashFileResponse(FileResponse):
         stat_result: typing.Optional[os.stat_result] = None,
         method: typing.Optional[str] = None,
         content_disposition_type: str = "attachment",
+        extra_dirs: typing.Optional[typing.List[str]] = None
     ) -> None:
         filename = parse_checksum(checksum)
         stat_result = None
@@ -69,8 +70,16 @@ class HashFileResponse(FileResponse):
             content_disposition_type=content_disposition_type,
         )
         self.directory = directory
+        self.extra_dirs = extra_dirs
 
     async def refresh_stat_headers(self):
+        if self.extra_dirs and not os.path.exists(self.path):
+            for extra_dir in self.extra_dirs:
+                path0 = os.path.join(extra_dir, self.filename)
+                if os.path.exists(path0):
+                    self.path = path0
+                    break
+
         try:
             stat_result = await anyio.to_thread.run_sync(os.stat, self.path)
             del self.headers["content-length"]
