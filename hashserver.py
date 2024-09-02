@@ -25,12 +25,15 @@ Checksum = Annotated[
     Union[str, bytes], BeforeValidator(partial(parse_checksum, as_bytes=False))
 ]
 
+
 def calculate_checksum(buffer):
     """Return SHA3-256 checksum"""
     return sha3_256(buffer).digest().hex()
 
+
 def calculate_checksum_stream():
     return sha3_256()
+
 
 DEFAULT_LOCK_TIMEOUT = 120.0
 CHUNK_SIZE = 640 * 1024  # for now, hardcoded
@@ -39,7 +42,7 @@ env = os.environ
 as_commandline_tool = True
 
 if "HASHSERVER_DIRECTORY" in os.environ:
-    directory = os.environ["HASHSERVER_DIRECTORY"]    
+    directory = os.environ["HASHSERVER_DIRECTORY"]
     lock_timeout = DEFAULT_LOCK_TIMEOUT
     if "HASHSERVER_LOCK_TIMEOUT" in os.environ:
         lock_timeout = float(os.environ["HASHSERVER_LOCK_TIMEOUT"])
@@ -50,6 +53,13 @@ if "HASHSERVER_DIRECTORY" in os.environ:
         if env_writable.lower() in ("true", "1"):
             writable = True
     as_commandline_tool = False
+
+    extra_dirs = os.environ.get("HASHSERVER_EXTRA_DIRS")
+    if extra_dirs:
+        extra_dirs = [d.strip() for d in extra_dirs.split(";")]
+    else:
+        extra_dirs = []
+
 else:
     if (
         len(sys.argv)
@@ -115,6 +125,9 @@ If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""
         extra_dirs = os.environ.get("HASHSERVER_EXTRA_DIRS")
     if extra_dirs:
         extra_dirs = [d.strip() for d in extra_dirs.split(";")]
+    else:
+        extra_dirs = []
+
 
 if not os.path.exists(directory):
     raise FileExistsError(f"Directory '{directory}' does not exist")
@@ -160,6 +173,7 @@ async def runtime_exception_handler(request, exc):
         content={"message": f"{exc}"},
     )
 
+
 async def until_no_lock(lockpath):
     while 1:
         try:
@@ -170,13 +184,13 @@ async def until_no_lock(lockpath):
         if time.time() - lock_mtime > lock_timeout:
             break
         await anyio.sleep(1)
-    
+
 
 @app.get("/has")
-async def has_buffers(checksums:Annotated[List[Checksum], Body()]) -> JSONResponse:
+async def has_buffers(checksums: Annotated[List[Checksum], Body()]) -> JSONResponse:
     global_lockpath = os.path.join(directory, ".LOCK")
     await until_no_lock(global_lockpath)
-    
+
     result = []
     for checksum in checksums:
         path = os.path.join(directory, checksum)
@@ -193,17 +207,19 @@ async def has_buffers(checksums:Annotated[List[Checksum], Body()]) -> JSONRespon
 
     return result
 
+
 @app.get("/{checksum}")
 async def get_file(checksum: Annotated[Checksum, Path()]) -> HashFileResponse:
     ResponseClass = VaultHashFileResponse if is_vault else HashFileResponse
-    response = ResponseClass(directory=directory, checksum=checksum, extra_dirs=extra_dirs)
+    response = ResponseClass(
+        directory=directory, checksum=checksum, extra_dirs=extra_dirs
+    )
     response.lock_timeout = lock_timeout
     return response
 
 
-
 async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Response:
-    
+
     cs_stream = calculate_checksum_stream()
 
     path = os.path.join(directory, checksum)

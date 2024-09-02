@@ -54,7 +54,7 @@ class HashFileResponse(FileResponse):
         stat_result: typing.Optional[os.stat_result] = None,
         method: typing.Optional[str] = None,
         content_disposition_type: str = "attachment",
-        extra_dirs: typing.Optional[typing.List[str]] = None
+        extra_dirs: typing.Optional[typing.List[str]] = None,
     ) -> None:
         filename = parse_checksum(checksum)
         stat_result = None

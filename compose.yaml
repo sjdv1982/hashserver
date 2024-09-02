@@ -7,6 +7,7 @@ services:
     environment:
       - HASHSERVER_HOST=${HASHSERVER_HOST:?}
       - HASHSERVER_PORT=${HASHSERVER_PORT:?}
+      - HASHSERVER_EXTRA_DIRS=""  # extra dirs cannot be mounted into the Docker image!
       - HASHSERVER_WRITABLE
     volumes:
       - ${HASHSERVER_DIRECTORY:?}:/buffers
