@@ -167,6 +167,7 @@ class VaultHashFileResponse(HashFileResponse):
         background: typing.Optional[BackgroundTask] = None,
         method: typing.Optional[str] = None,
         content_disposition_type: str = "attachment",
+        extra_dirs: None = None,
     ) -> None:
         filename = parse_checksum(checksum)
         FileResponse.__init__(
@@ -182,6 +183,8 @@ class VaultHashFileResponse(HashFileResponse):
             content_disposition_type=content_disposition_type,
         )
         self.directory = directory
+        if extra_dirs:
+            raise ValueError("extra_dirs is not supported for vault directories")
 
     async def get_path(self):
         self.path = None

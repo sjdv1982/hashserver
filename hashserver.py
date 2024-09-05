@@ -56,7 +56,14 @@ if "HASHSERVER_DIRECTORY" in os.environ:
 
     extra_dirs = os.environ.get("HASHSERVER_EXTRA_DIRS")
     if extra_dirs:
-        extra_dirs = [d.strip() for d in extra_dirs.split(";")]
+
+        def _filt(d):
+            d = d.strip()
+            if d == '""' or d == "''":
+                return ""
+
+        extra_dirs = [_filt(d) for d in extra_dirs.split(";")]
+        extra_dirs = [d for d in extra_dirs if d]
     else:
         extra_dirs = []
 
@@ -192,9 +199,24 @@ async def has_buffers(checksums: Annotated[List[Checksum], Body()]) -> JSONRespo
     await until_no_lock(global_lockpath)
 
     result = []
+    vault_subdirectories = []
+    for dep in ("independent", "dependent"):
+        for size in ("small", "big"):
+            subdirectory = os.path.join(directory, dep, size)
+            vault_subdirectories.append(subdirectory)
     for checksum in checksums:
-        path = os.path.join(directory, checksum)
-        if os.path.exists(path):
+        ok = False
+        if is_vault:
+            for subdirectory in vault_subdirectories:
+                path = os.path.join(subdirectory, checksum)
+                if os.path.exists(path):
+                    ok = True
+                    break
+        else:
+            path = os.path.join(directory, checksum)
+            if os.path.exists(path):
+                ok = True
+        if ok:
             result.append(True)
         else:
             for extra_dir in extra_dirs:
