@@ -12,7 +12,12 @@ from fastapi.encoders import jsonable_encoder
 
 from functools import partial
 
-from hash_file_response import parse_checksum, HashFileResponse, VaultHashFileResponse
+from hash_file_response import (
+    parse_checksum,
+    HashFileResponse,
+    PrefixHashFileResponse,
+    VaultHashFileResponse,
+)
 
 from typing_extensions import Annotated
 from pydantic.functional_validators import BeforeValidator
@@ -67,6 +72,8 @@ if "HASHSERVER_DIRECTORY" in os.environ:
     else:
         extra_dirs = []
 
+    layout = os.environ.get("HASHSERVER_LAYOUT", "prefix")
+
 else:
     if (
         len(sys.argv)
@@ -83,9 +90,7 @@ else:
         "directory",
         help="""Directory where buffers are located.
 
-    Buffers have the same file name as their (SHA3-256) checksum.
-The directory may be organized as a Seamless vault directory,
-containing subdirectories for (in)dependent and big/small buffers.""",
+    Buffers have the same file name as their (SHA3-256) checksum.""",
     )
     parser.add_argument(
         "--extra-dirs",
@@ -123,6 +128,27 @@ If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""
         default="127.0.0.1",
     )
 
+    parser.add_argument(
+        "--layout",
+        type=str,
+        help="""Directory layout.
+        One of:
+        - "flat". 
+        A buffer with checksum CS is stored as file "$DIRECTORY/$CS".
+
+        - "prefix". 
+        A buffer with checksum CS is stored as file "$DIRECTORY/$PREFIX/$CS",
+        where PREFIX is the first two characters of CS.
+        
+        - "vault". Writeable must be false. 
+        The directory has been saved using Seamless ctx.save_vault.
+        Thus, a buffer with checksum CS has been stored as file "$DIRECTORY/$X/$Y/$CS",
+        where X is "dependent" or "independent", and Y is "big" or "small".
+        
+        """,
+        default="prefix",
+    )
+
     args = parser.parse_args()
     directory = args.directory
     lock_timeout = args.lock_timeout
@@ -134,6 +160,7 @@ If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""
         extra_dirs = [d.strip() for d in extra_dirs.split(";")]
     else:
         extra_dirs = []
+    layout = args.layout
 
 
 if not os.path.exists(directory):
@@ -143,15 +170,10 @@ if not os.path.isdir(directory):
 if lock_timeout <= 0:
     raise RuntimeError("Lock timeout must be positive")
 
-is_vault = True
-for dep in ("independent", "dependent"):
-    for size in ("small", "big"):
-        subdirectory = os.path.join(directory, dep, size)
-        if not os.path.isdir(subdirectory):
-            is_vault = False
-            break
+if layout not in ("flat", "prefix", "vault"):
+    raise RuntimeError("Layout must be 'flat', 'prefix' or 'vault'")
 
-if is_vault and writable:
+if layout == "vault" and writable:
     raise RuntimeError("Vault directories cannot be writable")
 
 app = FastAPI()
@@ -199,29 +221,36 @@ async def has_buffers(checksums: Annotated[List[Checksum], Body()]) -> JSONRespo
     await until_no_lock(global_lockpath)
 
     result = []
-    vault_subdirectories = []
-    for dep in ("independent", "dependent"):
-        for size in ("small", "big"):
-            subdirectory = os.path.join(directory, dep, size)
-            vault_subdirectories.append(subdirectory)
+
+    if layout == "vault":
+        vault_subdirectories = []
+        for dep in ("independent", "dependent"):
+            for size in ("small", "big"):
+                subdirectory = os.path.join(directory, dep, size)
+                vault_subdirectories.append(subdirectory)
+
     for checksum in checksums:
         ok = False
-        if is_vault:
+        if layout == "vault":
             for subdirectory in vault_subdirectories:
                 path = os.path.join(subdirectory, checksum)
-                if os.path.exists(path):
+                if await anyio.Path(path).exists():
                     ok = True
                     break
         else:
-            path = os.path.join(directory, checksum)
-            if os.path.exists(path):
+            if layout == "prefix":
+                prefix = parse_checksum(checksum)[:2]
+                path = os.path.join(directory, prefix, checksum)
+            else:
+                path = os.path.join(directory, checksum)
+            if await anyio.Path(path).exists():
                 ok = True
         if ok:
             result.append(True)
         else:
             for extra_dir in extra_dirs:
                 path = os.path.join(extra_dir, checksum)
-                if os.path.exists(path):
+                if await anyio.Path(path).exists():
                     result.append(True)
                     break
             else:
@@ -230,9 +259,16 @@ async def has_buffers(checksums: Annotated[List[Checksum], Body()]) -> JSONRespo
     return result
 
 
+_response_classes_get_file = {
+    "flat": HashFileResponse,
+    "prefix": PrefixHashFileResponse,
+    "vault": VaultHashFileResponse,
+}
+
+
 @app.get("/{checksum}")
 async def get_file(checksum: Annotated[Checksum, Path()]) -> HashFileResponse:
-    ResponseClass = VaultHashFileResponse if is_vault else HashFileResponse
+    ResponseClass = _response_classes_get_file[layout]
     response = ResponseClass(
         directory=directory, checksum=checksum, extra_dirs=extra_dirs
     )
@@ -244,10 +280,26 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
 
     cs_stream = calculate_checksum_stream()
 
-    path = os.path.join(directory, checksum)
+    if layout == "prefix":
+        prefix = parse_checksum(checksum)[:2]
+        path = os.path.join(directory, prefix, checksum)
+        global_lockpath = os.path.join(directory, prefix, ".LOCK")
 
-    # Wait for locks from other applications
-    global_lockpath = os.path.join(directory, ".LOCK")
+    else:
+        path = os.path.join(directory, checksum)
+        global_lockpath = os.path.join(directory, ".LOCK")
+
+    if layout == "prefix":
+        target_directory = anyio.Path(os.path.join(directory, prefix))
+        if not await target_directory.exists():
+            await target_directory.mkdir()
+
+    # Acquire the locks, wait for other applications
+    # There is a global lock and a file-specific lock to acquire.
+    # Currently:
+    # - hashserver itself writes a file-specific lock
+    # - Seamless ctx.save_vault writes the global lock while it is saving the buffers
+    # - Nothing writes a global lock for flat or prefix directories
     file_lockpath = path + ".LOCK"
     for lockpath in (global_lockpath, file_lockpath):
         await until_no_lock(lockpath)
@@ -257,13 +309,15 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
         except FileNotFoundError:
             pass
 
+    # Write (=hold) the file-specific lock, and write the buffer to file
+    pathlib.Path(file_lockpath).touch()
+    lock_touch_time = time.time()
     ok = False
     try:
-        lock_touch_time = None
         async with await anyio.open_file(path, mode="wb") as file:
             async for chunk in rq.stream():
                 cs_stream.update(chunk)
-                if lock_touch_time is None or time.time() - lock_touch_time > 10:
+                if time.time() - lock_touch_time > 10:
                     pathlib.Path(file_lockpath).touch()
                     lock_touch_time = time.time()
                 await file.write(chunk)

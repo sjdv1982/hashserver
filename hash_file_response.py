@@ -40,6 +40,8 @@ class HashFileResponse(FileResponse):
     """FileResponse with SHA3-256 checksum instead of filename.
     File has the same name as checksum."""
 
+    _PREFIX = False
+
     lock_timeout = 120
     chunk_size = 640 * 1024
 
@@ -57,9 +59,14 @@ class HashFileResponse(FileResponse):
         extra_dirs: typing.Optional[typing.List[str]] = None,
     ) -> None:
         filename = parse_checksum(checksum)
+        self.prefix = filename[:2]
         stat_result = None
+        if self._PREFIX:
+            path = os.path.join(directory, self.prefix, filename)
+        else:
+            path = os.path.join(directory, filename)
         super().__init__(
-            path=os.path.join(directory, filename),
+            path=path,
             status_code=status_code,
             headers=headers,
             media_type=media_type,
@@ -71,11 +78,24 @@ class HashFileResponse(FileResponse):
         )
         self.directory = directory
         self.extra_dirs = extra_dirs
+        extra_dirs_layout = {}
+        for extra_dir in extra_dirs:
+            prefix_file = os.path.join(extra_dir, ".HASHSERVER_PREFIX")
+            if os.path.exists(prefix_file):
+                layout = "prefix"
+            else:
+                layout = "flat"
+            extra_dirs_layout[extra_dir] = layout
+        self.extra_dirs_layout = extra_dirs_layout
 
     async def refresh_stat_headers(self):
         if self.extra_dirs and not os.path.exists(self.path):
             for extra_dir in self.extra_dirs:
-                path0 = os.path.join(extra_dir, self.filename)
+                layout = self.extra_dirs_layout[extra_dir]
+                if layout == "prefix":
+                    path0 = os.path.join(extra_dir, self.prefix, self.filename)
+                else:
+                    path0 = os.path.join(extra_dir, self.filename)
                 if os.path.exists(path0):
                     self.path = path0
                     break
@@ -97,10 +117,7 @@ class HashFileResponse(FileResponse):
                 raise RuntimeError(f"File at path {self.path} is not a file.")
         return stat_result
 
-    async def until_no_lock(self):
-        lockpaths = [os.path.join(self.directory, ".LOCK")]
-        if self.path is not None:
-            lockpaths.append(self.path + ".LOCK")
+    async def _until_no_lock(self, lockpaths):
         for lockpath in lockpaths:
             while 1:
                 try:
@@ -111,6 +128,12 @@ class HashFileResponse(FileResponse):
                 if time.time() - lock_mtime > self.lock_timeout:
                     break
                 await anyio.sleep(1)
+
+    async def until_no_lock(self):
+        lockpaths = [os.path.join(self.directory, ".LOCK")]
+        if self.path is not None:
+            lockpaths.append(self.path + ".LOCK")
+        return await self._until_no_lock(lockpaths)
 
     async def calculate_checksum(self):
         """Return SHA3-256 checksum"""
@@ -146,6 +169,52 @@ class HashFileResponse(FileResponse):
                 )
 
         await super().__call__(scope=scope, receive=receive, send=send)
+
+
+class PrefixHashFileResponse(HashFileResponse):
+    """FileResponse with SHA3-256 checksum instead of filename.
+    File has the same name as checksum.
+    File is stored as $PREFIX/$CHECKSUM, where $PREFIX is the first two
+      characters of $CHECKSUM
+    """
+
+    _PREFIX = True
+
+    def __init__(
+        self,
+        checksum: str,
+        directory: str,
+        status_code: int = 200,
+        headers: typing.Optional[typing.Mapping[str, str]] = None,
+        media_type: typing.Optional[str] = None,
+        background: typing.Optional[BackgroundTask] = None,
+        stat_result: typing.Optional[os.stat_result] = None,
+        method: typing.Optional[str] = None,
+        content_disposition_type: str = "attachment",
+        extra_dirs: typing.Optional[typing.List[str]] = None,
+    ) -> None:
+
+        super().__init__(
+            checksum=checksum,
+            directory=directory,
+            status_code=status_code,
+            headers=headers,
+            media_type=media_type,
+            background=background,
+            stat_result=stat_result,
+            method=method,
+            content_disposition_type=content_disposition_type,
+            extra_dirs=extra_dirs,
+        )
+        prefix_file = os.path.join(directory, ".HASHSERVER_PREFIX")
+        with open(prefix_file, mode="wb") as f:
+            f.write(b"1\n")
+
+    async def until_no_lock(self):
+        lockpaths = [os.path.join(self.directory, self.prefix, ".LOCK")]
+        if self.path is not None:
+            lockpaths.append(self.path + ".LOCK")
+        return await self._until_no_lock(lockpaths)
 
 
 class VaultHashFileResponse(HashFileResponse):
