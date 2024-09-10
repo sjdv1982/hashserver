@@ -81,7 +81,7 @@ class HashFileResponse(FileResponse):
         extra_dirs_layout = {}
         for extra_dir in extra_dirs:
             prefix_file = os.path.join(extra_dir, ".HASHSERVER_PREFIX")
-            if os.path.exists(prefix_file):
+            if await anyio.Path(prefix_file).exists():
                 layout = "prefix"
             else:
                 layout = "flat"
@@ -89,14 +89,14 @@ class HashFileResponse(FileResponse):
         self.extra_dirs_layout = extra_dirs_layout
 
     async def refresh_stat_headers(self):
-        if self.extra_dirs and not os.path.exists(self.path):
+        if self.extra_dirs and not await anyio.Path(self.path).exists():
             for extra_dir in self.extra_dirs:
                 layout = self.extra_dirs_layout[extra_dir]
                 if layout == "prefix":
                     path0 = os.path.join(extra_dir, self.prefix, self.filename)
                 else:
                     path0 = os.path.join(extra_dir, self.filename)
-                if os.path.exists(path0):
+                if await anyio.Path(path0).exists():
                     self.path = path0
                     break
 
