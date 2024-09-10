@@ -81,7 +81,7 @@ class HashFileResponse(FileResponse):
         extra_dirs_layout = {}
         for extra_dir in extra_dirs:
             prefix_file = os.path.join(extra_dir, ".HASHSERVER_PREFIX")
-            if await anyio.Path(prefix_file).exists():
+            if os.path.exists(prefix_file):
                 layout = "prefix"
             else:
                 layout = "flat"
