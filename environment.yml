@@ -5,3 +5,6 @@ dependencies:
   - fastapi
   - uvicorn 
   - uvicorn-standard
+  - pip
+  - pip:
+      - -e .

@@ -354,6 +354,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+def main():
+    """Console-script shim; server launch happens during module import."""
+    return 0
+
+
 if as_commandline_tool:
     import uvicorn
 

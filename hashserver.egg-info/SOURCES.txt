@@ -1,0 +1,12 @@
+LICENSE.txt
+README.md
+hash_file_response.py
+hashserver.py
+pyproject.toml
+setup.cfg
+hashserver.egg-info/PKG-INFO
+hashserver.egg-info/SOURCES.txt
+hashserver.egg-info/dependency_links.txt
+hashserver.egg-info/entry_points.txt
+hashserver.egg-info/requires.txt
+hashserver.egg-info/top_level.txt
