@@ -266,6 +266,11 @@ _response_classes_get_file = {
 }
 
 
+@app.get("/healthcheck")
+async def healthcheck() -> Response:
+    return Response(content="OK")
+
+
 @app.get("/{checksum}")
 async def get_file(checksum: Annotated[Checksum, Path()]) -> HashFileResponse:
     ResponseClass = _response_classes_get_file[layout]
