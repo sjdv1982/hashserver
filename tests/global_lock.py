@@ -1,5 +1,3 @@
-# run from the main directory
-
 import subprocess
 import signal
 import time
@@ -9,8 +7,8 @@ import json
 import threading
 import requests
 
-DIRECTORY = "tests/bufferdir"
-with open("tests/lorem_ipsum.txt") as f:
+DIRECTORY = "bufferdir"
+with open("lorem_ipsum.txt") as f:
     lorem = f.read()
 lorem_checksum = "bde3f269175e1dcda13848278aa6046bd643cea85b84c8b8bb80952e70b6eae0"
 lorem_file = os.path.join(DIRECTORY, lorem_checksum)
@@ -38,7 +36,7 @@ def request(checksum):
 
 
 server = subprocess.Popen(
-    "python hashserver.py tests/bufferdir --lock-timeout 5",
+    "hashserver bufferdir --lock-timeout 5 --layout flat",
     shell=True,
     stderr=subprocess.STDOUT,
     stdout=subprocess.PIPE,
@@ -73,7 +71,7 @@ try:
     except Exception:
         raise AssertionError(output) from None
     refe_output = {
-        "message": "File corruption: file at path tests/bufferdir/bde3f269175e1dcda13848278aa6046bd643cea85b84c8b8bb80952e70b6eae0 does not have the correct SHA3-256 checksum."
+        "message": "File corruption: file at path bufferdir/bde3f269175e1dcda13848278aa6046bd643cea85b84c8b8bb80952e70b6eae0 does not have the correct SHA3-256 checksum."
     }
     assert output == refe_output, output
 

@@ -1,5 +1,3 @@
-# run from the main directory
-
 import subprocess
 import signal
 import time
@@ -24,7 +22,7 @@ def request(checksum):
 
 
 server = subprocess.Popen(
-    "python hashserver.py tests/bufferdir",
+    "hashserver bufferdir --layout flat",
     shell=True,
     stderr=subprocess.STDOUT,
     stdout=subprocess.PIPE,

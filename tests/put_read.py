@@ -1,5 +1,3 @@
-# run from the main directory
-
 import subprocess
 import signal
 import time
@@ -31,10 +29,10 @@ def put(buffer: bytes):
     return response.status_code, response.content
 
 
-os.system("rm -rf tests/writedir")
-os.makedirs("tests/writedir")
+os.system("rm -rf writedir")
+os.makedirs("writedir")
 server = subprocess.Popen(
-    "python hashserver.py tests/writedir --w",
+    "hashserver writedir --w --layout flat",
     shell=True,
     stderr=subprocess.STDOUT,
     stdout=subprocess.PIPE,
@@ -59,7 +57,7 @@ try:
 
     print("END")
 finally:
-    os.system("rm -rf tests/writedir")
+    os.system("rm -rf writedir")
 
     print("Server logs:")
     server.send_signal(signal.SIGINT)

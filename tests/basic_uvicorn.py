@@ -1,5 +1,3 @@
-# run from the main directory
-
 import subprocess
 import signal
 import time
@@ -23,7 +21,8 @@ def request(checksum):
     return status, output
 
 
-os.environ["HASHSERVER_DIRECTORY"] = "tests/bufferdir"
+os.environ["HASHSERVER_DIRECTORY"] = "bufferdir"
+os.environ["HASHSERVER_LAYOUT"] = "flat"
 server = subprocess.Popen(
     "uvicorn hashserver:app",
     shell=True,

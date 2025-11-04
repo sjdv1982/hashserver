@@ -12,12 +12,7 @@ from fastapi.encoders import jsonable_encoder
 
 from functools import partial
 
-from hash_file_response import (
-    parse_checksum,
-    HashFileResponse,
-    PrefixHashFileResponse,
-    VaultHashFileResponse,
-)
+from hash_file_response import parse_checksum, HashFileResponse, PrefixHashFileResponse
 
 from typing_extensions import Annotated
 from pydantic.functional_validators import BeforeValidator
@@ -97,7 +92,6 @@ else:
         help="""Extra directories where read-only buffers are located.
 
 This must be a list of directories separated by semi-colons (;).
-Seamless vault directories are not supported.
 If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""",
     )
 
@@ -139,12 +133,7 @@ If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""
         - "prefix". 
         A buffer with checksum CS is stored as file "$DIRECTORY/$PREFIX/$CS",
         where PREFIX is the first two characters of CS.
-        
-        - "vault". Writeable must be false. 
-        The directory has been saved using Seamless ctx.save_vault.
-        Thus, a buffer with checksum CS has been stored as file "$DIRECTORY/$X/$Y/$CS",
-        where X is "dependent" or "independent", and Y is "big" or "small".
-        
+                
         """,
         default="prefix",
     )
@@ -170,11 +159,8 @@ if not os.path.isdir(directory):
 if lock_timeout <= 0:
     raise RuntimeError("Lock timeout must be positive")
 
-if layout not in ("flat", "prefix", "vault"):
-    raise RuntimeError("Layout must be 'flat', 'prefix' or 'vault'")
-
-if layout == "vault" and writable:
-    raise RuntimeError("Vault directories cannot be writable")
+if layout not in ("flat", "prefix"):
+    raise RuntimeError("Layout must be 'flat' or 'prefix'")
 
 app = FastAPI()
 
@@ -222,29 +208,15 @@ async def has_buffers(checksums: Annotated[List[Checksum], Body()]) -> JSONRespo
 
     result = []
 
-    if layout == "vault":
-        vault_subdirectories = []
-        for dep in ("independent", "dependent"):
-            for size in ("small", "big"):
-                subdirectory = os.path.join(directory, dep, size)
-                vault_subdirectories.append(subdirectory)
-
     for checksum in checksums:
         ok = False
-        if layout == "vault":
-            for subdirectory in vault_subdirectories:
-                path = os.path.join(subdirectory, checksum)
-                if await anyio.Path(path).exists():
-                    ok = True
-                    break
+        if layout == "prefix":
+            prefix = parse_checksum(checksum)[:2]
+            path = os.path.join(directory, prefix, checksum)
         else:
-            if layout == "prefix":
-                prefix = parse_checksum(checksum)[:2]
-                path = os.path.join(directory, prefix, checksum)
-            else:
-                path = os.path.join(directory, checksum)
-            if await anyio.Path(path).exists():
-                ok = True
+            path = os.path.join(directory, checksum)
+        if await anyio.Path(path).exists():
+            ok = True
         if ok:
             result.append(True)
         else:
@@ -262,7 +234,6 @@ async def has_buffers(checksums: Annotated[List[Checksum], Body()]) -> JSONRespo
 _response_classes_get_file = {
     "flat": HashFileResponse,
     "prefix": PrefixHashFileResponse,
-    "vault": VaultHashFileResponse,
 }
 
 
@@ -303,7 +274,6 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
     # There is a global lock and a file-specific lock to acquire.
     # Currently:
     # - hashserver itself writes a file-specific lock
-    # - Seamless ctx.save_vault writes the global lock while it is saving the buffers
     # - Nothing writes a global lock for flat or prefix directories
     file_lockpath = path + ".LOCK"
     for lockpath in (global_lockpath, file_lockpath):

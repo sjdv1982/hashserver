@@ -1,5 +1,3 @@
-# run from the main directory
-
 import subprocess
 import signal
 import time
@@ -11,6 +9,7 @@ hello_checksum = "6825d69119b014b3d5ac9b17ce68bf98b66190c5e34397781b3776dca9c235
 other_checksum = "6825d69119b014b3d5ac9b17ce68bf98b66190c5e34397781b3776dca9c23530"
 bad_checksum1 = "6825d69119b014b3d5ac9b17ce68bf98b66190c5e34397781b"
 bad_checksum2 = "xx25d69119b014b3d5ac9b17ce68bf98b66190c5e34397781b3776dca9c23539"
+
 
 def has_buffers(checksums):
     response = requests.get("http://localhost:8000/has", json=checksums)
@@ -26,7 +25,7 @@ def has_buffers(checksums):
 
 
 server = subprocess.Popen(
-    "python hashserver.py tests/bufferdir",
+    "hashserver bufferdir --layout flat",
     shell=True,
     stderr=subprocess.STDOUT,
     stdout=subprocess.PIPE,

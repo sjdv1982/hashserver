@@ -1,5 +1,3 @@
-# run from the main directory
-
 import subprocess
 import signal
 import time
@@ -9,7 +7,7 @@ import requests
 import random
 
 random.seed(0)
-BUFFER = b''
+BUFFER = b""
 for n in range(10):
     BUFFER += random.randbytes(10**8)
 
@@ -33,9 +31,9 @@ def put(buffer: bytes):
     return response.status_code, response.content
 
 
-os.system("rm -rf tests/writedir")
-os.makedirs("tests/writedir")
-os.environ["HASHSERVER_DIRECTORY"] = "tests/writedir"
+os.system("rm -rf writedir")
+os.makedirs("writedir")
+os.environ["HASHSERVER_DIRECTORY"] = "writedir"
 os.environ["HASHSERVER_WRITABLE"] = "1"
 server = subprocess.Popen(
     "uvicorn hashserver:app --log-level warning",
@@ -67,7 +65,7 @@ try:
 
     print("END")
 finally:
-    os.system("rm -rf tests/writedir")
+    os.system("rm -rf writedir")
 
     print("Server logs:")
     server.send_signal(signal.SIGINT)
