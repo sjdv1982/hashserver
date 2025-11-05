@@ -1,6 +1,8 @@
 import os
 import sys
 import argparse
+import random
+import socket
 from typing import Union, List
 from hashlib import sha3_256
 
@@ -33,6 +35,29 @@ def calculate_checksum(buffer):
 
 def calculate_checksum_stream():
     return sha3_256()
+
+
+def pick_random_free_port(host: str, start: int, end: int) -> int:
+    if start < 0 or end > 65535:
+        raise RuntimeError("--port-range values must be between 0 and 65535")
+    if start > end:
+        raise RuntimeError("--port-range START must be less than or equal to END")
+
+    span = end - start + 1
+    attempted = set()
+    while len(attempted) < span:
+        port = random.randint(start, end)
+        if port in attempted:
+            continue
+        attempted.add(port)
+        try:
+            with socket.create_server((host, port), reuse_port=False):
+                pass
+        except OSError:
+            continue
+        return port
+
+    raise RuntimeError(f"No free port available in range {start}-{end}")
 
 
 DEFAULT_LOCK_TIMEOUT = 120.0
@@ -108,11 +133,18 @@ If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""
         help="Allow HTTP PUT requests",
     )
 
-    parser.add_argument(
+    port_group = parser.add_mutually_exclusive_group()
+    port_group.add_argument(
         "--port",
         type=int,
         help="Network port",
-        default=8000,
+    )
+    port_group.add_argument(
+        "--port-range",
+        type=int,
+        nargs=2,
+        metavar=("START", "END"),
+        help="Inclusive port range to select a random free port from",
     )
 
     parser.add_argument(
@@ -150,6 +182,12 @@ If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""
     else:
         extra_dirs = []
     layout = args.layout
+    if args.port_range:
+        start, end = args.port_range
+        selected_port = pick_random_free_port(args.host, start, end)
+    else:
+        selected_port = args.port if args.port is not None else 8000
+    args.port = selected_port
 
 
 if not os.path.exists(directory):
