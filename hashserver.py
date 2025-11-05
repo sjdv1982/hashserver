@@ -3,6 +3,7 @@ import sys
 import argparse
 import random
 import socket
+import json
 from typing import Union, List
 from hashlib import sha3_256
 
@@ -27,6 +28,8 @@ Checksum = Annotated[
     Union[str, bytes], BeforeValidator(partial(parse_checksum, as_bytes=False))
 ]
 
+STATUS_FILE_WAIT_TIMEOUT = 20.0
+
 
 def calculate_checksum(buffer):
     """Return SHA3-256 checksum"""
@@ -35,6 +38,73 @@ def calculate_checksum(buffer):
 
 def calculate_checksum_stream():
     return sha3_256()
+
+
+def wait_for_status_file(path: str, timeout: float = STATUS_FILE_WAIT_TIMEOUT):
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            with open(path, "r", encoding="utf-8") as status_stream:
+                contents = json.load(status_stream)
+                break
+        except FileNotFoundError:
+            if time.monotonic() >= deadline:
+                print(
+                    f"Status file '{path}' not found after {int(timeout)} seconds",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            time.sleep(0.1)
+            continue
+        except json.JSONDecodeError as exc:
+            print(
+                f"Status file '{path}' is not valid JSON: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    if not isinstance(contents, dict):
+        print(
+            f"Status file '{path}' must contain a JSON object",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    return contents
+
+
+class StatusFileTracker:
+    def __init__(self, path: str, base_contents: dict, port: int):
+        self.path = path
+        self._base_contents = dict(base_contents)
+        self.port = port
+        self.running_written = False
+
+    def _write(self, payload: dict):
+        tmp_path = f"{self.path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as status_stream:
+            json.dump(payload, status_stream)
+            status_stream.write("\n")
+        os.replace(tmp_path, self.path)
+
+    def write_running(self):
+        payload = dict(self._base_contents)
+        payload["port"] = self.port
+        payload["status"] = "running"
+        self._write(payload)
+        self._base_contents = payload
+        self.running_written = True
+
+    def write_failed(self):
+        payload = dict(self._base_contents)
+        payload["status"] = "failed"
+        self._write(payload)
+
+
+def raise_startup_error(exc: BaseException):
+    if status_tracker and not status_tracker.running_written:
+        status_tracker.write_failed()
+    raise exc
 
 
 def pick_random_free_port(host: str, start: int, end: int) -> int:
@@ -65,6 +135,9 @@ CHUNK_SIZE = 640 * 1024  # for now, hardcoded
 
 env = os.environ
 as_commandline_tool = True
+status_tracker = None
+status_file_path = None
+status_file_contents = None
 
 if "HASHSERVER_DIRECTORY" in os.environ:
     directory = os.environ["HASHSERVER_DIRECTORY"]
@@ -93,6 +166,8 @@ if "HASHSERVER_DIRECTORY" in os.environ:
         extra_dirs = []
 
     layout = os.environ.get("HASHSERVER_LAYOUT", "prefix")
+    status_file_path = None
+    status_file_contents = None
 
 else:
     if (
@@ -170,11 +245,23 @@ If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""
         default="prefix",
     )
 
+    parser.add_argument(
+        "--status-file",
+        type=str,
+        help="JSON file used to report server status",
+    )
+
     args = parser.parse_args()
     directory = args.directory
     lock_timeout = args.lock_timeout
     writable = args.writable
     extra_dirs = args.extra_dirs
+    status_file_path = args.status_file
+    if status_file_path:
+        status_file_contents = wait_for_status_file(status_file_path)
+        status_tracker = StatusFileTracker(
+            status_file_path, status_file_contents, args.port
+        )
     if not extra_dirs:
         extra_dirs = os.environ.get("HASHSERVER_EXTRA_DIRS")
     if extra_dirs:
@@ -184,21 +271,26 @@ If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""
     layout = args.layout
     if args.port_range:
         start, end = args.port_range
-        selected_port = pick_random_free_port(args.host, start, end)
+        try:
+            selected_port = pick_random_free_port(args.host, start, end)
+        except BaseException as exc:
+            raise_startup_error(exc)
     else:
         selected_port = args.port if args.port is not None else 8000
     args.port = selected_port
+    if status_tracker:
+        status_tracker.port = selected_port
 
 
 if not os.path.exists(directory):
-    raise FileExistsError(f"Directory '{directory}' does not exist")
+    raise_startup_error(FileExistsError(f"Directory '{directory}' does not exist"))
 if not os.path.isdir(directory):
-    raise FileExistsError(f"Directory '{directory}' is not a directory")
+    raise_startup_error(FileExistsError(f"Directory '{directory}' is not a directory"))
 if lock_timeout <= 0:
-    raise RuntimeError("Lock timeout must be positive")
+    raise_startup_error(RuntimeError("Lock timeout must be positive"))
 
 if layout not in ("flat", "prefix"):
-    raise RuntimeError("Layout must be 'flat' or 'prefix'")
+    raise_startup_error(RuntimeError("Layout must be 'flat' or 'prefix'"))
 
 app = FastAPI()
 
