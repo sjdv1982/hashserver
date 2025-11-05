@@ -4,6 +4,8 @@ import argparse
 import random
 import socket
 import json
+import asyncio
+import contextlib
 from typing import Union, List
 from hashlib import sha3_256
 
@@ -29,6 +31,15 @@ Checksum = Annotated[
 ]
 
 STATUS_FILE_WAIT_TIMEOUT = 20.0
+INACTIVITY_CHECK_INTERVAL = 1.0
+
+
+INACTIVITY_STATE = {
+    "timeout": None,
+    "last_request": None,
+    "task": None,
+    "server": None,
+}
 
 
 def calculate_checksum(buffer):
@@ -107,6 +118,43 @@ def raise_startup_error(exc: BaseException):
     raise exc
 
 
+def setup_inactivity_timeout(timeout_seconds: float, server):
+    INACTIVITY_STATE["timeout"] = timeout_seconds
+    INACTIVITY_STATE["server"] = server
+
+    async def monitor_inactivity():
+        try:
+            while True:
+                await asyncio.sleep(INACTIVITY_CHECK_INTERVAL)
+                last_request = INACTIVITY_STATE.get("last_request")
+                if last_request is None:
+                    continue
+                if time.monotonic() - last_request >= timeout_seconds:
+                    server.should_exit = True
+                    break
+        except asyncio.CancelledError:
+            raise
+
+    async def start_monitor():
+        INACTIVITY_STATE["last_request"] = time.monotonic()
+        loop = asyncio.get_running_loop()
+        INACTIVITY_STATE["task"] = loop.create_task(monitor_inactivity())
+
+    async def stop_monitor():
+        task = INACTIVITY_STATE.get("task")
+        if task:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            INACTIVITY_STATE["task"] = None
+        INACTIVITY_STATE["last_request"] = None
+        INACTIVITY_STATE["server"] = None
+        INACTIVITY_STATE["timeout"] = None
+
+    app.add_event_handler("startup", start_monitor)
+    app.add_event_handler("shutdown", stop_monitor)
+
+
 def pick_random_free_port(host: str, start: int, end: int) -> int:
     if start < 0 or end > 65535:
         raise RuntimeError("--port-range values must be between 0 and 65535")
@@ -138,6 +186,7 @@ as_commandline_tool = True
 status_tracker = None
 status_file_path = None
 status_file_contents = None
+timeout_seconds = None
 
 if "HASHSERVER_DIRECTORY" in os.environ:
     directory = os.environ["HASHSERVER_DIRECTORY"]
@@ -168,6 +217,7 @@ if "HASHSERVER_DIRECTORY" in os.environ:
     layout = os.environ.get("HASHSERVER_LAYOUT", "prefix")
     status_file_path = None
     status_file_contents = None
+    timeout_seconds = None
 
 else:
     if (
@@ -251,17 +301,26 @@ If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""
         help="JSON file used to report server status",
     )
 
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        help="Stop the server after this many seconds of inactivity",
+    )
+
     args = parser.parse_args()
     directory = args.directory
     lock_timeout = args.lock_timeout
     writable = args.writable
     extra_dirs = args.extra_dirs
     status_file_path = args.status_file
+    timeout_seconds = args.timeout
     if status_file_path:
         status_file_contents = wait_for_status_file(status_file_path)
         status_tracker = StatusFileTracker(
             status_file_path, status_file_contents, args.port
         )
+    if timeout_seconds is not None and timeout_seconds <= 0:
+        raise_startup_error(RuntimeError("--timeout must be a positive number"))
     if not extra_dirs:
         extra_dirs = os.environ.get("HASHSERVER_EXTRA_DIRS")
     if extra_dirs:
@@ -317,6 +376,16 @@ async def runtime_exception_handler(request, exc):
         status_code=400,
         content={"message": f"{exc}"},
     )
+
+
+@app.middleware("http")
+async def record_last_request(request: Request, call_next):
+    if INACTIVITY_STATE["timeout"] is not None:
+        INACTIVITY_STATE["last_request"] = time.monotonic()
+    response = await call_next(request)
+    if INACTIVITY_STATE["timeout"] is not None:
+        INACTIVITY_STATE["last_request"] = time.monotonic()
+    return response
 
 
 async def until_no_lock(lockpath):
@@ -462,8 +531,24 @@ def main():
 
 if as_commandline_tool:
     import uvicorn
+    config = uvicorn.Config(app, port=args.port, host=args.host)
+    server = uvicorn.Server(config)
 
-    uvicorn.run(app, port=args.port, host=args.host)
+    if status_tracker:
+
+        @app.on_event("startup")
+        async def _hashserver_status_file_running():
+            await anyio.to_thread.run_sync(status_tracker.write_running)
+
+    if timeout_seconds is not None:
+        setup_inactivity_timeout(timeout_seconds, server)
+
+    try:
+        server.run()
+    except BaseException:
+        if status_tracker and not status_tracker.running_written:
+            status_tracker.write_failed()
+        raise
 else:
     # uvicorn (or some other ASGI launcher) will take care of it
     pass
