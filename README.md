@@ -28,7 +28,7 @@ You can set a fixed listening port with `--port PORT` or request a random free p
 Alternatively, the hash server can run under a ASGI runner such as `uvicorn`.
 In that case, the hash server parameters must be first defined as environment variables. These variables are: HASHSERVER_DIRECTORY and (optionally) HASHSERVER_LOCK_TIMEOUT and HASHSERVER_WRITEABLE. The hash server is then launched by the ASGI runner, e.g. `uvicorn hashserver:app --port 1234`
 
-The hash server has an access point "/has" where a list of checksums can be provided as the "checksums" parameter, e.g. `import requests; requests.get("http://localhost:8000/has", json=checksums)` in a Python client. The server returns a JSON list of booleans of the same length, indicating for each checksum if it is present or not.
+The hash server has an access point "/has" where a list of checksums can be provided as the "checksums" parameter, e.g. `import requests; requests.get("http://localhost:8000/has", json=checksums)` in a Python client. The server returns a JSON list of integers of the same length, indicating for each checksum the length of the buffer, or 0 if it is not present.
 
 ### Using Docker compose
 

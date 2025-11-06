@@ -201,18 +201,17 @@ if "HASHSERVER_DIRECTORY" in os.environ:
             writable = True
     as_commandline_tool = False
 
-    extra_dirs = os.environ.get("HASHSERVER_EXTRA_DIRS")
-    if extra_dirs:
+    extra_dirs: list[str] = []
+    extra_dirs0 = os.environ.get("HASHSERVER_EXTRA_DIRS")
+    if extra_dirs0:
 
         def _filt(d):
             d = d.strip()
             if d == '""' or d == "''":
                 return ""
 
-        extra_dirs = [_filt(d) for d in extra_dirs.split(";")]
-        extra_dirs = [d for d in extra_dirs if d]
-    else:
-        extra_dirs = []
+        extra_dirs00 = [_filt(d) for d in extra_dirs0.split(";")]
+        extra_dirs = [d for d in extra_dirs00 if d]
 
     layout = os.environ.get("HASHSERVER_LAYOUT", "prefix")
     status_file_path = None
@@ -405,29 +404,43 @@ async def has_buffers(checksums: Annotated[List[Checksum], Body()]) -> JSONRespo
     global_lockpath = os.path.join(directory, ".LOCK")
     await until_no_lock(global_lockpath)
 
-    result = []
+    checksums2 = [parse_checksum(checksum) for checksum in checksums]
+    curr_results = [0] * len(checksums)
 
-    for checksum in checksums:
-        ok = False
+    async def stat_all(paths):
+        futures = []
+        for _, path in paths:
+            fut = anyio.Path(path).stat()
+            futures.append(fut)
+        result0 = await asyncio.gather(*futures, return_exceptions=True)
+        for (nr, path), stat in zip(paths, result0):
+            if isinstance(stat, Exception):
+                continue
+            curr_results[nr] = stat.st_size
+
+    paths = []
+    for nr, checksum in enumerate(checksums2):
+        assert isinstance(checksum, str)
         if layout == "prefix":
-            prefix = parse_checksum(checksum)[:2]
+            prefix = checksum[:2]
             path = os.path.join(directory, prefix, checksum)
         else:
             path = os.path.join(directory, checksum)
-        if await anyio.Path(path).exists():
-            ok = True
-        if ok:
-            result.append(True)
-        else:
-            for extra_dir in extra_dirs:
-                path = os.path.join(extra_dir, checksum)
-                if await anyio.Path(path).exists():
-                    result.append(True)
-                    break
-            else:
-                result.append(False)
+        paths.append((nr, path))
 
-    return result
+    await stat_all(paths)
+
+    for extra_dir in extra_dirs:
+        for nr, checksum in enumerate(checksums2):
+            if curr_results[nr]:
+                continue
+            path = os.path.join(extra_dir, checksum)
+            paths.append((nr, path))
+        if not len(paths):
+            break
+        await stat_all(paths)
+
+    return curr_results
 
 
 _response_classes_get_file = {
@@ -467,7 +480,7 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
     if layout == "prefix":
         target_directory = anyio.Path(os.path.join(directory, prefix))
         if not await target_directory.exists():
-            await target_directory.mkdir()
+            await target_directory.mkdir(exist_ok=True)
 
     # Acquire the locks, wait for other applications
     # There is a global lock and a file-specific lock to acquire.
@@ -531,6 +544,7 @@ def main():
 
 if as_commandline_tool:
     import uvicorn
+
     config = uvicorn.Config(app, port=args.port, host=args.host)
     server = uvicorn.Server(config)
 
@@ -543,6 +557,7 @@ if as_commandline_tool:
     if timeout_seconds is not None:
         setup_inactivity_timeout(timeout_seconds, server)
 
+    print("OK")
     try:
         server.run()
     except BaseException:
