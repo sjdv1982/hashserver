@@ -7,8 +7,6 @@ import json
 import asyncio
 import contextlib
 from typing import Union, List
-from hashlib import sha3_256
-
 from fastapi import FastAPI, Path, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
@@ -17,7 +15,14 @@ from fastapi.encoders import jsonable_encoder
 
 from functools import partial
 
-from hash_file_response import parse_checksum, HashFileResponse, PrefixHashFileResponse
+from hash_file_response import (
+    parse_checksum,
+    HashFileResponse,
+    PrefixHashFileResponse,
+    CHECKSUM_ALGORITHMS,
+    DEFAULT_CHECKSUM_ALGORITHM,
+    set_checksum_encoding,
+)
 
 from typing_extensions import Annotated
 from pydantic.functional_validators import BeforeValidator
@@ -29,6 +34,8 @@ import time
 Checksum = Annotated[
     Union[str, bytes], BeforeValidator(partial(parse_checksum, as_bytes=False))
 ]
+
+checksum_constructor = CHECKSUM_ALGORITHMS[DEFAULT_CHECKSUM_ALGORITHM]
 
 STATUS_FILE_WAIT_TIMEOUT = 20.0
 INACTIVITY_CHECK_INTERVAL = 1.0
@@ -43,12 +50,12 @@ INACTIVITY_STATE = {
 
 
 def calculate_checksum(buffer):
-    """Return SHA3-256 checksum"""
-    return sha3_256(buffer).digest().hex()
+    """Return checksum in the configured encoding."""
+    return checksum_constructor(buffer).digest().hex()
 
 
 def calculate_checksum_stream():
-    return sha3_256()
+    return checksum_constructor()
 
 
 def wait_for_status_file(path: str, timeout: float = STATUS_FILE_WAIT_TIMEOUT):
@@ -116,6 +123,19 @@ def raise_startup_error(exc: BaseException):
     if status_tracker and not status_tracker.running_written:
         status_tracker.write_failed()
     raise exc
+
+
+def configure_checksum_encoding(encoding: str):
+    global checksum_constructor
+    try:
+        checksum_constructor = CHECKSUM_ALGORITHMS[encoding]
+    except KeyError:
+        raise_startup_error(
+            RuntimeError(
+                f"--encoding must be one of: {', '.join(CHECKSUM_ALGORITHMS.keys())}"
+            )
+        )
+    set_checksum_encoding(encoding)
 
 
 def setup_inactivity_timeout(timeout_seconds: float, server):
@@ -217,6 +237,8 @@ if "HASHSERVER_DIRECTORY" in os.environ:
     status_file_path = None
     status_file_contents = None
     timeout_seconds = None
+    encoding = os.environ.get("HASHSERVER_ENCODING", DEFAULT_CHECKSUM_ALGORITHM)
+    configure_checksum_encoding(encoding)
 
 else:
     if (
@@ -234,7 +256,7 @@ else:
         "directory",
         help="""Directory where buffers are located.
 
-    Buffers have the same file name as their (SHA3-256) checksum.""",
+    Buffers have the same file name as their checksum (sha3-256 by default).""",
     )
     parser.add_argument(
         "--extra-dirs",
@@ -295,6 +317,14 @@ If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""
     )
 
     parser.add_argument(
+        "--encoding",
+        type=str,
+        choices=tuple(CHECKSUM_ALGORITHMS.keys()),
+        default=DEFAULT_CHECKSUM_ALGORITHM,
+        help="Hash algorithm used for checksum calculations (default: %(default)s)",
+    )
+
+    parser.add_argument(
         "--status-file",
         type=str,
         help="JSON file used to report server status",
@@ -311,6 +341,7 @@ If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""
     lock_timeout = args.lock_timeout
     writable = args.writable
     extra_dirs = args.extra_dirs
+    configure_checksum_encoding(args.encoding)
     status_file_path = args.status_file
     timeout_seconds = args.timeout
     if status_file_path:

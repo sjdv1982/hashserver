@@ -2,13 +2,37 @@ import os
 import stat
 import time
 import typing
-from hashlib import sha3_256
+from hashlib import sha3_256, sha256
 
 import anyio
 
 from starlette.background import BackgroundTask
 from starlette.types import Receive, Scope, Send
 from starlette.responses import FileResponse
+
+CHECKSUM_ALGORITHMS = {
+    "sha3-256": sha3_256,
+    "sha-256": sha256,
+}
+DEFAULT_CHECKSUM_ALGORITHM = "sha3-256"
+_current_checksum_algorithm = DEFAULT_CHECKSUM_ALGORITHM
+_hash_constructor = CHECKSUM_ALGORITHMS[DEFAULT_CHECKSUM_ALGORITHM]
+
+
+def set_checksum_encoding(encoding: str) -> None:
+    global _current_checksum_algorithm, _hash_constructor
+    try:
+        _hash_constructor = CHECKSUM_ALGORITHMS[encoding]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unsupported checksum encoding '{encoding}'. "
+            f"Choose one of: {', '.join(CHECKSUM_ALGORITHMS)}"
+        ) from exc
+    _current_checksum_algorithm = encoding
+
+
+def get_checksum_encoding() -> str:
+    return _current_checksum_algorithm
 
 
 def parse_checksum(checksum, as_bytes=False):
@@ -37,8 +61,7 @@ def parse_checksum(checksum, as_bytes=False):
 
 
 class HashFileResponse(FileResponse):
-    """FileResponse with SHA3-256 checksum instead of filename.
-    File has the same name as checksum."""
+    """FileResponse that validates files against their checksum-derived filename."""
 
     _PREFIX = False
 
@@ -136,8 +159,8 @@ class HashFileResponse(FileResponse):
         return await self._until_no_lock(lockpaths)
 
     async def calculate_checksum(self):
-        """Return SHA3-256 checksum"""
-        checksum = sha3_256()
+        """Return checksum for the configured algorithm."""
+        checksum = _hash_constructor()
         async with await anyio.open_file(self.path, mode="rb") as file:
             more_body = True
             while more_body:
@@ -165,14 +188,15 @@ class HashFileResponse(FileResponse):
             checksum2 = await self.calculate_checksum()
             if checksum2 != self.filename:
                 raise RuntimeError(
-                    f"File corruption: file at path {self.path} does not have the correct SHA3-256 checksum."
+                    f"File corruption: file at path {self.path} does not have the correct {_current_checksum_algorithm} checksum."
                 )
 
         await super().__call__(scope=scope, receive=receive, send=send)
 
 
 class PrefixHashFileResponse(HashFileResponse):
-    """FileResponse with SHA3-256 checksum instead of filename.
+    """Same as HashFileResponse but files are stored under a two-character prefix.
+
     File has the same name as checksum.
     File is stored as $PREFIX/$CHECKSUM, where $PREFIX is the first two
       characters of $CHECKSUM
