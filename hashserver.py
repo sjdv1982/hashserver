@@ -5,6 +5,9 @@ import random
 import socket
 import json
 import asyncio
+import aiofiles
+import aiofiles.os
+import aiofiles.tempfile
 import contextlib
 from typing import Union, List
 from fastapi import FastAPI, Path, Body, Request
@@ -12,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
+from starlette.requests import ClientDisconnect
 
 from functools import partial
 
@@ -210,9 +214,6 @@ timeout_seconds = None
 
 if "HASHSERVER_DIRECTORY" in os.environ:
     directory = os.environ["HASHSERVER_DIRECTORY"]
-    lock_timeout = DEFAULT_LOCK_TIMEOUT
-    if "HASHSERVER_LOCK_TIMEOUT" in os.environ:
-        lock_timeout = float(os.environ["HASHSERVER_LOCK_TIMEOUT"])
     writable = False
     if "HASHSERVER_WRITABLE" in os.environ:
         env_writable = os.environ["HASHSERVER_WRITABLE"]
@@ -264,13 +265,6 @@ else:
 
 This must be a list of directories separated by semi-colons (;).
 If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""",
-    )
-
-    parser.add_argument(
-        "--lock-timeout",
-        type=float,
-        help="Time-out after which lock files are broken",
-        default=DEFAULT_LOCK_TIMEOUT,
     )
 
     parser.add_argument(
@@ -338,7 +332,6 @@ If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""
 
     args = parser.parse_args()
     directory = args.directory
-    lock_timeout = args.lock_timeout
     writable = args.writable
     extra_dirs = args.extra_dirs
     configure_checksum_encoding(args.encoding)
@@ -375,8 +368,6 @@ if not os.path.exists(directory):
     raise_startup_error(FileExistsError(f"Directory '{directory}' does not exist"))
 if not os.path.isdir(directory):
     raise_startup_error(FileExistsError(f"Directory '{directory}' is not a directory"))
-if lock_timeout <= 0:
-    raise_startup_error(RuntimeError("Lock timeout must be positive"))
 
 if layout not in ("flat", "prefix"):
     raise_startup_error(RuntimeError("Layout must be 'flat' or 'prefix'"))
@@ -418,23 +409,8 @@ async def record_last_request(request: Request, call_next):
     return response
 
 
-async def until_no_lock(lockpath):
-    while 1:
-        try:
-            lock_stat_result = await anyio.to_thread.run_sync(os.stat, lockpath)
-        except FileNotFoundError:
-            break
-        lock_mtime = lock_stat_result.st_mtime
-        if time.time() - lock_mtime > lock_timeout:
-            break
-        await anyio.sleep(1)
-
-
 @app.get("/has")
 async def has_buffers(checksums: Annotated[List[Checksum], Body()]) -> JSONResponse:
-    global_lockpath = os.path.join(directory, ".LOCK")
-    await until_no_lock(global_lockpath)
-
     checksums2 = [parse_checksum(checksum) for checksum in checksums]
     curr_results = [0] * len(checksums)
 
@@ -491,68 +467,62 @@ async def get_file(checksum: Annotated[Checksum, Path()]) -> HashFileResponse:
     response = ResponseClass(
         directory=directory, checksum=checksum, extra_dirs=extra_dirs
     )
-    response.lock_timeout = lock_timeout
     return response
 
 
+_current_put_requests = set()
+
+
 async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Response:
+
+    if checksum in _current_put_requests:
+        return Response(status_code=202)
 
     cs_stream = calculate_checksum_stream()
 
     if layout == "prefix":
         prefix = parse_checksum(checksum)[:2]
         path = os.path.join(directory, prefix, checksum)
-        global_lockpath = os.path.join(directory, prefix, ".LOCK")
 
     else:
         path = os.path.join(directory, checksum)
-        global_lockpath = os.path.join(directory, ".LOCK")
+
+    if await aiofiles.ospath.exists(path):
+        return Response(status_code=201)
 
     if layout == "prefix":
         target_directory = anyio.Path(os.path.join(directory, prefix))
         if not await target_directory.exists():
             await target_directory.mkdir(exist_ok=True)
 
-    # Acquire the locks, wait for other applications
-    # There is a global lock and a file-specific lock to acquire.
-    # Currently:
-    # - hashserver itself writes a file-specific lock
-    # - Nothing writes a global lock for flat or prefix directories
-    file_lockpath = path + ".LOCK"
-    for lockpath in (global_lockpath, file_lockpath):
-        await until_no_lock(lockpath)
-    for lockpath in (global_lockpath, file_lockpath):
-        try:
-            pathlib.Path(lockpath).unlink()
-        except FileNotFoundError:
-            pass
-
-    # Write (=hold) the file-specific lock, and write the buffer to file
-    pathlib.Path(file_lockpath).touch()
-    lock_touch_time = time.time()
     ok = False
     try:
-        async with await anyio.open_file(path, mode="wb") as file:
+        _current_put_requests.add(checksum)
+        async with aiofiles.tempfile.NamedTemporaryFile(prefix=path + "-") as file:
             async for chunk in rq.stream():
                 cs_stream.update(chunk)
-                if time.time() - lock_touch_time > 10:
-                    pathlib.Path(file_lockpath).touch()
-                    lock_touch_time = time.time()
                 await file.write(chunk)
             buffer_checksum = cs_stream.hexdigest()
             if buffer_checksum != checksum:
                 return Response(status_code=400, content="Incorrect checksum")
+            if not await aiofiles.ospath.exists(path):
+                try:
+                    await aiofiles.os.link(file.name, path)
+                except FileExistsError:
+                    # someone else created the file, in the moment between .exists and .link
+                    pass
             ok = True
+
+    except ClientDisconnect:
+        return Response(status_code=400)
+
     finally:
+        _current_put_requests.remove(checksum)
         if not ok:
             try:
                 pathlib.Path(path).unlink()
             except FileNotFoundError:
                 pass
-        try:
-            pathlib.Path(file_lockpath).unlink()
-        except FileNotFoundError:
-            pass
 
     return Response(content="OK")
 
