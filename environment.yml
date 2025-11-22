@@ -2,8 +2,9 @@ name: hashserver
 channels:
   - conda-forge
 dependencies:
+  - aiofiles
   - fastapi
-  - uvicorn 
+  - uvicorn
   - uvicorn-standard
   - pip
   - pip:

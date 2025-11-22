@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 FROM python:3.10-alpine
 RUN apk add --no-cache curl
-RUN pip install fastapi uvicorn[standard]
+RUN pip install aiofiles fastapi uvicorn[standard]
 COPY hashserver.py .
 COPY hash_file_response.py .
 ENV HASHSERVER_DIRECTORY /buffers
