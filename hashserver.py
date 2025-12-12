@@ -9,7 +9,7 @@ import aiofiles
 import aiofiles.os
 import aiofiles.tempfile
 import contextlib
-from typing import Union, List
+from typing import Iterable, List, Union
 from fastapi import FastAPI, Path, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
@@ -412,6 +412,7 @@ async def record_last_request(request: Request, call_next):
 @app.get("/has")
 async def has_buffers(checksums: Annotated[List[Checksum], Body()]) -> JSONResponse:
     checksums2 = [parse_checksum(checksum) for checksum in checksums]
+    await _wait_for_current_put_requests(checksums2)
     curr_results = [0] * len(checksums)
 
     async def stat_all(paths):
@@ -463,20 +464,30 @@ async def healthcheck() -> Response:
 
 @app.get("/{checksum}")
 async def get_file(checksum: Annotated[Checksum, Path()]) -> HashFileResponse:
+    checksum2 = parse_checksum(checksum)
+    await _wait_for_current_put_requests((checksum2,))
     ResponseClass = _response_classes_get_file[layout]
     response = ResponseClass(
-        directory=directory, checksum=checksum, extra_dirs=extra_dirs
+        directory=directory, checksum=checksum2, extra_dirs=extra_dirs
     )
     return response
 
 
-_current_put_requests = set()
+_current_put_requests: set[str] = set()
+_current_put_condition = asyncio.Condition()
+
+
+async def _wait_for_current_put_requests(checksums: Iterable[str]) -> None:
+    if isinstance(checksums, (str, bytes)):
+        checksum_set = {checksums}
+    else:
+        checksum_set = set(checksums)
+    async with _current_put_condition:
+        while _current_put_requests.intersection(checksum_set):
+            await _current_put_condition.wait()
 
 
 async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Response:
-
-    if checksum in _current_put_requests:
-        return Response(status_code=202)
 
     cs_stream = calculate_checksum_stream()
 
@@ -496,8 +507,13 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
             await target_directory.mkdir(exist_ok=True)
 
     ok = False
+    added_to_put_requests = False
     try:
-        _current_put_requests.add(checksum)
+        async with _current_put_condition:
+            if checksum in _current_put_requests:
+                return Response(status_code=202)
+            _current_put_requests.add(checksum)
+            added_to_put_requests = True
         async with aiofiles.tempfile.NamedTemporaryFile(prefix=path + "-") as file:
             async for chunk in rq.stream():
                 cs_stream.update(chunk)
@@ -517,8 +533,11 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
         return Response(status_code=400)
 
     finally:
-        _current_put_requests.remove(checksum)
-        if not ok:
+        if added_to_put_requests:
+            async with _current_put_condition:
+                _current_put_requests.remove(checksum)
+                _current_put_condition.notify_all()
+        if added_to_put_requests and not ok:
             try:
                 pathlib.Path(path).unlink()
             except FileNotFoundError:
