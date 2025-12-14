@@ -9,7 +9,8 @@ import aiofiles
 import aiofiles.os
 import aiofiles.tempfile
 import contextlib
-from typing import Iterable, List, Union
+from dataclasses import dataclass
+from typing import Iterable, List, Optional, Set, Union
 from fastapi import FastAPI, Path, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
@@ -204,6 +205,7 @@ def pick_random_free_port(host: str, start: int, end: int) -> int:
 
 DEFAULT_LOCK_TIMEOUT = 120.0
 CHUNK_SIZE = 640 * 1024  # for now, hardcoded
+PROMISE_TTL_SECONDS = 10 * 60.0
 
 env = os.environ
 as_commandline_tool = True
@@ -448,12 +450,42 @@ async def has_buffers(checksums: Annotated[List[Checksum], Body()]) -> JSONRespo
             break
         await stat_all(paths)
 
+    promised = await _promise_registry.promised_indices(checksums2)
+    for idx in promised:
+        curr_results[idx] = True
+
     return curr_results
 
 
+class PromiseAwareResponseMixin:
+    def __init__(self, *, checksum: str, **kwargs):
+        self._promise_checksum = checksum
+        super().__init__(checksum=checksum, **kwargs)
+
+    async def __call__(self, scope, receive, send):
+        while True:
+            try:
+                await super().__call__(scope, receive, send)
+                return
+            except FileNotFoundError:
+                should_retry = await _promise_registry.wait_for(self._promise_checksum)
+                if not should_retry:
+                    raise
+
+
+class PromiseAwareHashFileResponse(PromiseAwareResponseMixin, HashFileResponse):
+    pass
+
+
+class PromiseAwarePrefixHashFileResponse(
+    PromiseAwareResponseMixin, PrefixHashFileResponse
+):
+    pass
+
+
 _response_classes_get_file = {
-    "flat": HashFileResponse,
-    "prefix": PrefixHashFileResponse,
+    "flat": PromiseAwareHashFileResponse,
+    "prefix": PromiseAwarePrefixHashFileResponse,
 }
 
 
@@ -473,8 +505,94 @@ async def get_file(checksum: Annotated[Checksum, Path()]) -> HashFileResponse:
     return response
 
 
+@app.put("/promise/{checksum}")
+async def promise(checksum: Annotated[Checksum, Path()]) -> JSONResponse:
+    checksum2 = parse_checksum(checksum)
+    await _promise_registry.add(checksum2)
+    return JSONResponse(
+        status_code=202,
+        content={"checksum": checksum2, "expires_in": PROMISE_TTL_SECONDS},
+    )
+
+
 _current_put_requests: set[str] = set()
 _current_put_condition = asyncio.Condition()
+
+
+@dataclass
+class _PromiseEntry:
+    event: asyncio.Event
+    expires_at: float
+
+
+class PromiseRegistry:
+    def __init__(self, ttl_seconds: float = PROMISE_TTL_SECONDS):
+        self._ttl_seconds = ttl_seconds
+        self._promises: dict[str, _PromiseEntry] = {}
+        self._lock = asyncio.Lock()
+
+    def _cleanup_locked(self, now: Optional[float] = None) -> None:
+        if now is None:
+            now = time.monotonic()
+        expired = [
+            cs for cs, entry in self._promises.items() if entry.expires_at <= now
+        ]
+        for checksum in expired:
+            self._promises.pop(checksum, None)
+
+    async def add(self, checksum: str) -> float:
+        now = time.monotonic()
+        expires_at = now + self._ttl_seconds
+        async with self._lock:
+            self._cleanup_locked(now)
+            entry = self._promises.get(checksum)
+            if entry is None:
+                entry = _PromiseEntry(asyncio.Event(), expires_at)
+                self._promises[checksum] = entry
+            else:
+                entry.expires_at = expires_at
+        return expires_at
+
+    async def resolve(self, checksum: str) -> None:
+        async with self._lock:
+            entry = self._promises.pop(checksum, None)
+        if entry:
+            entry.event.set()
+
+    async def promised_indices(self, checksums: List[str]) -> Set[int]:
+        async with self._lock:
+            self._cleanup_locked()
+            promised = {idx for idx, cs in enumerate(checksums) if cs in self._promises}
+        return promised
+
+    async def wait_for(self, checksum: str) -> bool:
+        while True:
+            async with self._lock:
+                self._cleanup_locked()
+                entry = self._promises.get(checksum)
+                if entry is None:
+                    return False
+                timeout = entry.expires_at - time.monotonic()
+                if timeout <= 0:
+                    self._promises.pop(checksum, None)
+                    return False
+                event = entry.event
+            try:
+                await asyncio.wait_for(event.wait(), timeout)
+                return True
+            except asyncio.TimeoutError:
+                async with self._lock:
+                    current = self._promises.get(checksum)
+                    if current is not entry:
+                        continue
+                    remaining = current.expires_at - time.monotonic()
+                    if remaining <= 0:
+                        self._promises.pop(checksum, None)
+                        return False
+                continue
+
+
+_promise_registry = PromiseRegistry()
 
 
 async def _wait_for_current_put_requests(checksums: Iterable[str]) -> None:
@@ -489,16 +607,18 @@ async def _wait_for_current_put_requests(checksums: Iterable[str]) -> None:
 
 async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Response:
 
+    checksum_str = parse_checksum(checksum)
     cs_stream = calculate_checksum_stream()
 
     if layout == "prefix":
-        prefix = parse_checksum(checksum)[:2]
-        path = os.path.join(directory, prefix, checksum)
+        prefix = checksum_str[:2]
+        path = os.path.join(directory, prefix, checksum_str)
 
     else:
-        path = os.path.join(directory, checksum)
+        path = os.path.join(directory, checksum_str)
 
     if await aiofiles.ospath.exists(path):
+        await _promise_registry.resolve(checksum_str)
         return Response(status_code=201)
 
     if layout == "prefix":
@@ -510,16 +630,16 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
     added_to_put_requests = False
     try:
         async with _current_put_condition:
-            if checksum in _current_put_requests:
+            if checksum_str in _current_put_requests:
                 return Response(status_code=202)
-            _current_put_requests.add(checksum)
+            _current_put_requests.add(checksum_str)
             added_to_put_requests = True
         async with aiofiles.tempfile.NamedTemporaryFile(prefix=path + "-") as file:
             async for chunk in rq.stream():
                 cs_stream.update(chunk)
                 await file.write(chunk)
             buffer_checksum = cs_stream.hexdigest()
-            if buffer_checksum != checksum:
+            if buffer_checksum != checksum_str:
                 return Response(status_code=400, content="Incorrect checksum")
             if not await aiofiles.ospath.exists(path):
                 try:
@@ -535,7 +655,7 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
     finally:
         if added_to_put_requests:
             async with _current_put_condition:
-                _current_put_requests.remove(checksum)
+                _current_put_requests.remove(checksum_str)
                 _current_put_condition.notify_all()
         if added_to_put_requests and not ok:
             try:
@@ -543,6 +663,8 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
             except FileNotFoundError:
                 pass
 
+    if ok:
+        await _promise_registry.resolve(checksum_str)
     return Response(content="OK")
 
 
