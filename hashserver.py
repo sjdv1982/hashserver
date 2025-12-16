@@ -5,10 +5,12 @@ import random
 import socket
 import json
 import asyncio
+import logging
 import aiofiles
 import aiofiles.os
 import aiofiles.tempfile
 import contextlib
+import copy
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Set, Union
 from fastapi import FastAPI, Path, Body, Request
@@ -375,6 +377,7 @@ if layout not in ("flat", "prefix"):
     raise_startup_error(RuntimeError("Layout must be 'flat' or 'prefix'"))
 
 app = FastAPI()
+LOGGER = logging.getLogger("hashserver")
 
 
 @app.exception_handler(RequestValidationError)
@@ -497,6 +500,7 @@ async def healthcheck() -> Response:
 @app.get("/{checksum}")
 async def get_file(checksum: Annotated[Checksum, Path()]) -> HashFileResponse:
     checksum2 = parse_checksum(checksum)
+    LOGGER.info("GET %s", checksum2)
     await _wait_for_current_put_requests((checksum2,))
     ResponseClass = _response_classes_get_file[layout]
     response = ResponseClass(
@@ -505,7 +509,6 @@ async def get_file(checksum: Annotated[Checksum, Path()]) -> HashFileResponse:
     return response
 
 
-@app.put("/promise/{checksum}")
 async def promise(checksum: Annotated[Checksum, Path()]) -> JSONResponse:
     checksum2 = parse_checksum(checksum)
     await _promise_registry.add(checksum2)
@@ -608,7 +611,7 @@ async def _wait_for_current_put_requests(checksums: Iterable[str]) -> None:
 async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Response:
 
     checksum_str = parse_checksum(checksum)
-    cs_stream = calculate_checksum_stream()
+    LOGGER.info("PUT %s start", checksum_str)
 
     if layout == "prefix":
         prefix = checksum_str[:2]
@@ -618,6 +621,7 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
         path = os.path.join(directory, checksum_str)
 
     if await aiofiles.ospath.exists(path):
+        LOGGER.info("PUT %s already exists", checksum_str)
         await _promise_registry.resolve(checksum_str)
         return Response(status_code=201)
 
@@ -628,9 +632,11 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
 
     ok = False
     added_to_put_requests = False
+    cs_stream = calculate_checksum_stream()
     try:
         async with _current_put_condition:
             if checksum_str in _current_put_requests:
+                LOGGER.info("PUT %s already in progress", checksum_str)
                 return Response(status_code=202)
             _current_put_requests.add(checksum_str)
             added_to_put_requests = True
@@ -640,6 +646,7 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
                 await file.write(chunk)
             buffer_checksum = cs_stream.hexdigest()
             if buffer_checksum != checksum_str:
+                LOGGER.warning("PUT %s incorrect checksum", checksum_str)
                 return Response(status_code=400, content="Incorrect checksum")
             if not await aiofiles.ospath.exists(path):
                 try:
@@ -650,6 +657,7 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
             ok = True
 
     except ClientDisconnect:
+        LOGGER.warning("PUT %s client disconnected", checksum_str)
         return Response(status_code=400)
 
     finally:
@@ -664,12 +672,14 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
                 pass
 
     if ok:
+        LOGGER.info("PUT %s completed", checksum_str)
         await _promise_registry.resolve(checksum_str)
     return Response(content="OK")
 
 
 if writable:
     put_file = app.put("/{checksum}")(put_file)
+    promise = app.put("/promise/{checksum}")(promise)
 
 app.add_middleware(
     CORSMiddleware,
@@ -684,10 +694,34 @@ def main():
     return 0
 
 
+def _timestamped_log_config():
+    try:
+        from uvicorn.config import LOGGING_CONFIG
+    except Exception:  # pragma: no cover - uvicorn import guard
+        return None
+
+    log_config = copy.deepcopy(LOGGING_CONFIG)
+    formatters = log_config.get("formatters", {})
+    for name in ("default", "access"):
+        formatter = formatters.get(name)
+        if not formatter:
+            continue
+        fmt = formatter.get("fmt")
+        if fmt:
+            formatter["fmt"] = f"%(asctime)s {fmt}"
+        else:
+            formatter["fmt"] = "%(asctime)s %(message)s"
+    return log_config
+
+
 if as_commandline_tool:
     import uvicorn
 
-    config = uvicorn.Config(app, port=args.port, host=args.host)
+    log_config = _timestamped_log_config()
+    config_kwargs = dict(app=app, port=args.port, host=args.host)
+    if log_config is not None:
+        config_kwargs["log_config"] = log_config
+    config = uvicorn.Config(**config_kwargs)
     server = uvicorn.Server(config)
 
     if status_tracker:
