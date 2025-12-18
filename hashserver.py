@@ -414,8 +414,8 @@ async def record_last_request(request: Request, call_next):
     return response
 
 
-@app.get("/has")
-async def has_buffers(checksums: Annotated[List[Checksum], Body()]) -> JSONResponse:
+@app.get("/buffer-length")
+async def buffer_length(checksums: Annotated[List[Checksum], Body()]) -> JSONResponse:
     checksums2 = [parse_checksum(checksum) for checksum in checksums]
     await _wait_for_current_put_requests(checksums2)
     curr_results = [0] * len(checksums)
@@ -452,6 +452,61 @@ async def has_buffers(checksums: Annotated[List[Checksum], Body()]) -> JSONRespo
         if not len(paths):
             break
         await stat_all(paths)
+
+    promised = await _promise_registry.promised_indices(checksums2)
+    for idx in promised:
+        curr_results[idx] = True
+
+    return curr_results
+
+
+@app.get("/has")
+async def has(checksums: Annotated[List[Checksum], Body()]) -> JSONResponse:
+    checksums2 = [parse_checksum(checksum) for checksum in checksums]
+    curr_results = [False] * len(checksums)
+
+    # Flag any in-flight uploads immediately.
+    for idx, checksum in enumerate(checksums2):
+        if checksum in _current_put_requests:
+            curr_results[idx] = True
+
+    async def exists_all(paths):
+        futures = []
+        for _, path in paths:
+            fut = anyio.Path(path).exists()
+            futures.append(fut)
+        result0 = await asyncio.gather(*futures, return_exceptions=True)
+        for (nr, path), exists in zip(paths, result0):
+            if isinstance(exists, Exception):
+                continue
+            if exists:
+                curr_results[nr] = True
+
+    paths = []
+    for nr, checksum in enumerate(checksums2):
+        assert isinstance(checksum, str)
+        if curr_results[nr]:
+            continue
+        if layout == "prefix":
+            prefix = checksum[:2]
+            path = os.path.join(directory, prefix, checksum)
+        else:
+            path = os.path.join(directory, checksum)
+        paths.append((nr, path))
+
+    if paths:
+        await exists_all(paths)
+
+    for extra_dir in extra_dirs:
+        paths = []
+        for nr, checksum in enumerate(checksums2):
+            if curr_results[nr]:
+                continue
+            path = os.path.join(extra_dir, checksum)
+            paths.append((nr, path))
+        if not paths:
+            break
+        await exists_all(paths)
 
     promised = await _promise_registry.promised_indices(checksums2)
     for idx in promised:
