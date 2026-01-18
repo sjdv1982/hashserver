@@ -55,8 +55,6 @@ INACTIVITY_STATE = {
     "server": None,
 }
 
-aiofiles_chmod = aiofiles.os.wrap(os.chmod)  # aiofiles.os lacks chmod
-
 
 def calculate_checksum(buffer):
     """Return checksum in the configured encoding."""
@@ -695,10 +693,16 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
         target_directory = anyio.Path(target_dir)
         if not await target_directory.exists():
             await target_directory.mkdir(exist_ok=True)
-        await aiofiles_chmod(target_dir, 0o3775)
+        try:
+            await aiofiles.os.chmod(target_dir, 0o3775)
+        except Exception:
+            pass
     if await aiofiles.ospath.exists(path):
         LOGGER.info("PUT %s already exists", checksum_str)
-        await aiofiles_chmod(path, 0o444)
+        try:
+            await aiofiles.os.chmod(path, 0o444)
+        except Exception:
+            pass
         await _promise_registry.resolve(checksum_str)
         return Response(status_code=201)
 
@@ -735,7 +739,7 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
                     raise
         ok = True
         try:
-            await aiofiles_chmod(path, 0o444)
+            await aiofiles.os.chmod(path, 0o444)
         except Exception:
             pass
 

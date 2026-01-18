@@ -2,8 +2,8 @@ Metadata-Version: 2.4
 Name: hashserver
 Version: 0.1.0
 Summary: Simple FastAPI-based hash server
-Author: Sjoerd
-License: MIT
+Author: Sjoerd de Vries
+License-Expression: MIT
 Requires-Python: >=3.9
 License-File: LICENSE.txt
 Requires-Dist: fastapi
