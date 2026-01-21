@@ -531,12 +531,12 @@ async def _has(checksums: List[Checksum], include_promises: bool) -> List[bool]:
 
 @app.get("/has")
 async def has(checksums: Annotated[List[Checksum], Body()]) -> JSONResponse:
-    return _has(checksums, include_promises=True)
+    return await _has(checksums, include_promises=True)
 
 
 @app.get("/has-now")
 async def has(checksums: Annotated[List[Checksum], Body()]) -> JSONResponse:
-    return _has(checksums, include_promises=False)
+    return await _has(checksums, include_promises=False)
 
 
 class PromiseAwareResponseMixin:
