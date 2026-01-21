@@ -38,9 +38,7 @@ import anyio
 import pathlib
 import time
 
-Checksum = Annotated[
-    Union[str, bytes], BeforeValidator(partial(parse_checksum, as_bytes=False))
-]
+Checksum = Annotated[str, BeforeValidator(parse_checksum)]
 
 checksum_constructor = CHECKSUM_ALGORITHMS[DEFAULT_CHECKSUM_ALGORITHM]
 
@@ -476,8 +474,7 @@ async def buffer_length(checksums: Annotated[List[Checksum], Body()]) -> JSONRes
     return curr_results
 
 
-@app.get("/has")
-async def has(checksums: Annotated[List[Checksum], Body()]) -> JSONResponse:
+async def _has(checksums: List[Checksum], include_promises: bool) -> List[bool]:
     checksums2 = [parse_checksum(checksum) for checksum in checksums]
     curr_results = [False] * len(checksums)
 
@@ -524,11 +521,22 @@ async def has(checksums: Annotated[List[Checksum], Body()]) -> JSONResponse:
             break
         await exists_all(paths)
 
-    promised = await _promise_registry.promised_indices(checksums2)
-    for idx in promised:
-        curr_results[idx] = True
+    if include_promises:
+        promised = await _promise_registry.promised_indices(checksums2)
+        for idx in promised:
+            curr_results[idx] = True
 
     return curr_results
+
+
+@app.get("/has")
+async def has(checksums: Annotated[List[Checksum], Body()]) -> JSONResponse:
+    return _has(checksums, include_promises=True)
+
+
+@app.get("/has-now")
+async def has(checksums: Annotated[List[Checksum], Body()]) -> JSONResponse:
+    return _has(checksums, include_promises=False)
 
 
 class PromiseAwareResponseMixin:

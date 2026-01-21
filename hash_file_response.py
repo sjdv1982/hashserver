@@ -35,11 +35,10 @@ def get_checksum_encoding() -> str:
     return _current_checksum_algorithm
 
 
-def parse_checksum(checksum, as_bytes=False):
+def parse_checksum(checksum) -> str:
     """Parses checksum and returns it as string.
-    If as_bytes is True, return it as bytes instead.
 
-    Snippet from the Seamless source code (fair use)"""
+    Adapted from the Seamless source code (fair use)"""
     if isinstance(checksum, bytes):
         checksum = checksum.hex()
     if isinstance(checksum, str):
@@ -50,10 +49,7 @@ def parse_checksum(checksum, as_bytes=False):
     if isinstance(checksum, bytes):
         if len(checksum) != 32:
             raise ValueError("Wrong length")
-        if as_bytes:
-            return checksum
-        else:
-            return checksum.hex()
+        return checksum.hex()
 
     if checksum is None:
         return
