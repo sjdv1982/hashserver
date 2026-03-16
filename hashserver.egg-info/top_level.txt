@@ -1,2 +1,0 @@
-hash_file_response
-hashserver

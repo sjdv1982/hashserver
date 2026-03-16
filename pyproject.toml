@@ -1,7 +1,8 @@
 [project]
 name = "hashserver"
-version = "0.1.0"
+version = "1.0"
 description = "Simple FastAPI-based hash server"
+readme = "README.md"
 license = "MIT"
 authors = [{name = "Sjoerd de Vries"}]
 requires-python = ">=3.9"
