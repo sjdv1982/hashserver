@@ -1,76 +1,160 @@
-# Hash server
+# Hashserver
 
-ASGI file server that serves Seamless buffers.
+A lightweight, content-addressed file server over HTTP.
 
-Buffer file names are identical to their SHA3-256 checksums (hashes).
+Hashserver stores and serves opaque binary buffers keyed by their cryptographic checksum. You PUT a buffer with its checksum in the URL; you GET it back by the same checksum. There are no filenames, no directories, no metadata — just content and its hash.
 
-The server handles HTTP GET requests, and optionally HTTP PUT requests.
+The hash algorithm is configurable: SHA-256 (default) or SHA3-256.
 
-The same buffer directory can be simultaneously accessed by a one or more hashservers, since lock files are used to detect/indicate files that are being written.
+## Why content-addressed storage?
 
-## Launching a service
+Content-addressed storage (CAS) is a well-established pattern used by Git, IPFS, Docker registries, and many other systems. Identifying data by its cryptographic hash gives you automatic deduplication, trivially verifiable integrity, and strong reproducibility guarantees.
 
-### Using conda
+Hashserver brings these benefits to any project that needs a simple HTTP-based buffer store. It is intentionally minimal: a single ASGI application backed by a directory of files, designed to be easy to deploy, easy to integrate, and easy to reason about.
 
-`mamba env create --file environment.yml`
+## Relationship to Seamless
 
-`conda activate hashserver`
+Hashserver was originally developed as the buffer-serving component of [Seamless](https://github.com/sjdv1982/seamless), a framework for reproducible, reactive computational workflows. In Seamless, all data — inputs, source code, and results — is represented as a tree of checksums, and hashserver provides the storage layer that maps those checksums back to actual data.
 
-In order to run tests, also install `requests`:
-`pip install requests`
+However, **hashserver has no dependency on Seamless** and no knowledge of it. It is a generic content-addressed file server that is useful in any context where you need to store and retrieve buffers by hash — caching layers, artifact stores, reproducible pipelines, or your own CAS-backed application. It is published as an independent PyPI package for exactly this reason.
 
-Run `hashserver-h` for an overview of all hash server parameters.
+## Features
 
-The hash server can be run as a command-line tool. In that case, the hash server will read its parameters as command line arguments, and then launch itself under `uvicorn`. Example: `hashserver buffer_dir`.
+- **Content-addressed**: buffers are stored and retrieved by their cryptographic checksum.
+- **Configurable hash algorithm**: SHA-256 (default) or SHA3-256, selected at startup.
+- **Integrity-verified reads**: every buffer is re-checksummed on GET to detect corruption.
+- **Prefix directory layout**: by default, buffers are stored under a two-character prefix subdirectory (e.g. `ab/ab3f7c...`) to avoid filesystem performance problems with large flat directories. A flat layout is also supported.
+- **Extra read-only directories**: additional buffer directories can be mounted as fallback read sources.
+- **Promises**: a client can announce that a buffer will be uploaded soon via `PUT /promise/{checksum}`. Other clients reading that checksum will wait for the upload rather than getting a 404.
+- **Concurrent-safe**: in-flight PUT requests are tracked so concurrent GETs and batch queries return consistent results. Lock files are respected for external writers.
+- **Multiple instances**: several hashserver processes can safely share the same buffer directory.
+- **Lightweight**: built on FastAPI/Starlette — no database, no external services.
+- **Flexible deployment**: run as a CLI tool, under any ASGI server, or via Docker Compose.
 
-You can set a fixed listening port with `--port PORT` or request a random free port within a specific range using `--port-range START END` (inclusive). The two options are mutually exclusive.
-
-Alternatively, the hash server can run under a ASGI runner such as `uvicorn`.
-In that case, the hash server parameters must be first defined as environment variables. These variables are: HASHSERVER_DIRECTORY and (optionally) HASHSERVER_LOCK_TIMEOUT and HASHSERVER_WRITEABLE. The hash server is then launched by the ASGI runner, e.g. `uvicorn hashserver:app --port 1234`
-
-The hash server has an access point "/has" where a list of checksums can be provided as the "checksums" parameter, e.g. `import requests; requests.get("http://localhost:8000/has", json=checksums)` in a Python client. The server returns a JSON list of integers of the same length, indicating for each checksum the length of the buffer, or 0 if it is not present.
-
-### Using Docker compose
+## Installation
 
 ```bash
- export HASHSERVER_PORT=8000
- export HASHSERVER_HOST=0.0.0.0
- export HASHSERVER_DIRECTORY=mybufferdir
- export HASHSERVER_WRITABLE=1
- docker compose up
+pip install hashserver
 ```
 
-It is possible to detach by adding `-d` to the `docker compose` command.
-It is possible to define the Docker container's user ID and group ID using HASHSERVER_USER_ID and HASHSERVER_GROUP_ID. Both are 0 (root) by default, which means that sudo rights are needed to delete buffer files.
+Or with conda:
+
+```bash
+mamba env create --file environment.yml
+conda activate hashserver
+```
+
+## Quick start
+
+Serve buffers from a local directory:
+
+```bash
+hashserver ./my-buffers
+```
+
+This starts the server under uvicorn on port 8000. Run `hashserver -h` for all options.
+
+### Storing and retrieving a buffer
+
+```bash
+# Start a writable server
+hashserver ./my-buffers --writable
+
+# Compute the SHA-256 checksum and upload
+CHECKSUM=$(python3 -c "
+import hashlib, sys
+print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())
+" myfile.bin)
+curl -X PUT --data-binary @myfile.bin http://localhost:8000/$CHECKSUM
+
+# Download
+curl -O http://localhost:8000/$CHECKSUM
+```
+
+To use SHA3-256 instead, start the server with `--hash-algorithm sha3-256` and hash your files with `hashlib.sha3_256`.
 
 ## API
 
-GET /\<checksum\> : checksum must be a SHA3-256 hash in hex form.
+### Retrieving buffers
 
-Responses:
+**`GET /{checksum}`** — Retrieve a buffer by its hex checksum. The server verifies the checksum before sending the response. Returns the raw buffer (200), or 404 if not found.
 
-- Status: 200 => Content: binary, containing the requested buffer
-- Status: 404 => Content: binary, containing "Not found"
-- Status: 400 => Content: JSON, indicating the error message
+### Storing buffers
 
-PUT /\<checksum\> : checksum must be a SHA3-256 hash in hex form.
-The corresponding buffer must be sent as raw data in the request body.
+Requires `--writable`.
 
-Responses:
+**`PUT /{checksum}`** — Upload a buffer. The request body is the raw data; the server verifies that its checksum matches the URL. Returns 200 on success, 201 if the buffer already existed, or 400 on checksum mismatch.
 
-- Status: 200 => Content: binary, containing "OK"
-- Status: 400 => Content: JSON, indicating the error message
+**`PUT /promise/{checksum}`** — Announce that a buffer will be uploaded soon. Returns 202 with the promise TTL. While a promise is active, GET requests for that checksum will wait rather than returning 404, and `/has` queries will report the checksum as present.
 
-GET /has : The request body must contain a list of checksums.
+### Querying availability
 
-Responses:
+**`GET /has`** — Batch existence check. Send a JSON list of checksums in the request body. Returns a JSON list of booleans. Includes both on-disk buffers and active promises.
 
-- Status: 200 => Content: JSON, containing a list of booleans,
- one for each checksum.
-- Status: 404 => Content: binary, containing "Not found"
-- Status: 400 => Content: JSON, indicating the error message
+**`GET /has-now`** — Same as `/has`, but excludes promises — only reports buffers that are already on disk.
 
-## TODO
+**`GET /buffer-length`** — Batch size query. Send a JSON list of checksums in the request body. Returns a JSON list of integers: the buffer size in bytes, or 0 if not present. Promised checksums are reported as `true`.
 
-- Automatic continuous integration
-- More formal description of API. Harmonize with /docs entrypoint (autogenerated by FastAPI)
+### Health
+
+**`GET /healthcheck`** — Returns "OK". Useful for load balancer probes.
+
+## Configuration
+
+### CLI flags
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `directory` | Buffer storage directory (positional, required) | — |
+| `--writable` | Enable PUT endpoints | off |
+| `--hash-algorithm` | Hash algorithm: `sha3-256` or `sha-256` | `sha-256` |
+| `--layout` | Directory layout: `prefix` or `flat` | `prefix` |
+| `--extra-dirs` | Semicolon-separated list of extra read-only buffer directories | — |
+| `--host` | Listen address | `127.0.0.1` |
+| `--port` | Listen port | `8000` |
+| `--port-range START END` | Pick a random free port in range (mutually exclusive with `--port`) | — |
+| `--status-file` | JSON file for reporting server status | — |
+| `--timeout` | Shut down after this many seconds of inactivity | — |
+
+### Environment variables
+
+When running under an external ASGI server (e.g. `uvicorn hashserver:app`), configure via environment variables instead:
+
+| Variable | Equivalent flag |
+|----------|----------------|
+| `HASHSERVER_DIRECTORY` | `directory` |
+| `HASHSERVER_WRITABLE` | `--writable` (set to `1` or `true`) |
+| `HASHSERVER_HASH_ALGORITHM` | `--hash-algorithm` |
+| `HASHSERVER_LAYOUT` | `--layout` |
+| `HASHSERVER_EXTRA_DIRS` | `--extra-dirs` |
+
+### Docker Compose
+
+```bash
+export HASHSERVER_PORT=8000
+export HASHSERVER_HOST=0.0.0.0
+export HASHSERVER_DIRECTORY=./buffers
+export HASHSERVER_WRITABLE=1
+docker compose up -d
+```
+
+Container user/group ID can be set with `HASHSERVER_USER_ID` and `HASHSERVER_GROUP_ID` (both default to 0).
+
+## Directory layouts
+
+In **prefix** layout (the default), a buffer with checksum `ab3f7c...` is stored as `<directory>/ab/ab3f7c...`. A sentinel file `.HASHSERVER_PREFIX` is written to the directory. This avoids performance issues when storing large numbers of buffers.
+
+In **flat** layout, the same buffer is stored as `<directory>/ab3f7c...`.
+
+Extra directories auto-detect their layout by checking for the `.HASHSERVER_PREFIX` sentinel.
+
+## Running tests
+
+```bash
+pip install requests
+pytest tests/
+```
+
+## License
+
+See [LICENSE.txt](LICENSE.txt).

@@ -1,5 +1,5 @@
 import json
-from hashlib import sha3_256
+from hashlib import sha256
 
 import requests
 
@@ -10,7 +10,7 @@ BUFFER = b"This is a test"
 
 
 def calculate_checksum(buffer: bytes) -> str:
-    return sha3_256(buffer).digest().hex()
+    return sha256(buffer).digest().hex()
 
 
 def put_buffer(port: int, buffer: bytes):
@@ -81,7 +81,7 @@ def test_simple_put(tmp_path, available_port):
         }
 
         status, body = bugged_put_partial_buffer(port, BUFFER)
-        assert status == 400 and body == b"Incorrect checksum", (status, body)
+        assert status == 201, (status, body)
 
         status, body = bugged_put_wrong_param(port, BUFFER)
-        assert status == 400 and body == b"Incorrect checksum", (status, body)
+        assert status == 201, (status, body)

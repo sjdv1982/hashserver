@@ -10,29 +10,29 @@ from starlette.background import BackgroundTask
 from starlette.types import Receive, Scope, Send
 from starlette.responses import FileResponse
 
-CHECKSUM_ALGORITHMS = {
+HASH_ALGORITHMS = {
     "sha3-256": sha3_256,
     "sha-256": sha256,
 }
-DEFAULT_CHECKSUM_ALGORITHM = "sha3-256"
-_current_checksum_algorithm = DEFAULT_CHECKSUM_ALGORITHM
-_hash_constructor = CHECKSUM_ALGORITHMS[DEFAULT_CHECKSUM_ALGORITHM]
+DEFAULT_HASH_ALGORITHM = "sha-256"
+_current_hash_algorithm = DEFAULT_HASH_ALGORITHM
+_hash_constructor = HASH_ALGORITHMS[DEFAULT_HASH_ALGORITHM]
 
 
-def set_checksum_encoding(encoding: str) -> None:
-    global _current_checksum_algorithm, _hash_constructor
+def set_hash_algorithm(algorithm: str) -> None:
+    global _current_hash_algorithm, _hash_constructor
     try:
-        _hash_constructor = CHECKSUM_ALGORITHMS[encoding]
+        _hash_constructor = HASH_ALGORITHMS[algorithm]
     except KeyError as exc:
         raise ValueError(
-            f"Unsupported checksum encoding '{encoding}'. "
-            f"Choose one of: {', '.join(CHECKSUM_ALGORITHMS)}"
+            f"Unsupported hash algorithm '{algorithm}'. "
+            f"Choose one of: {', '.join(HASH_ALGORITHMS)}"
         ) from exc
-    _current_checksum_algorithm = encoding
+    _current_hash_algorithm = algorithm
 
 
-def get_checksum_encoding() -> str:
-    return _current_checksum_algorithm
+def get_hash_algorithm() -> str:
+    return _current_hash_algorithm
 
 
 def parse_checksum(checksum) -> str:
@@ -184,7 +184,7 @@ class HashFileResponse(FileResponse):
             checksum2 = await self.calculate_checksum()
             if checksum2 != self.filename:
                 raise RuntimeError(
-                    f"File corruption: file at path {self.path} does not have the correct {_current_checksum_algorithm} checksum."
+                    f"File corruption: file at path {self.path} does not have the correct {_current_hash_algorithm} checksum."
                 )
 
         await super().__call__(scope=scope, receive=receive, send=send)

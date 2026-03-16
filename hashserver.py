@@ -26,9 +26,9 @@ from hash_file_response import (
     parse_checksum,
     HashFileResponse,
     PrefixHashFileResponse,
-    CHECKSUM_ALGORITHMS,
-    DEFAULT_CHECKSUM_ALGORITHM,
-    set_checksum_encoding,
+    HASH_ALGORITHMS,
+    DEFAULT_HASH_ALGORITHM,
+    set_hash_algorithm,
 )
 
 from typing_extensions import Annotated
@@ -40,7 +40,7 @@ import time
 
 Checksum = Annotated[str, BeforeValidator(parse_checksum)]
 
-checksum_constructor = CHECKSUM_ALGORITHMS[DEFAULT_CHECKSUM_ALGORITHM]
+checksum_constructor = HASH_ALGORITHMS[DEFAULT_HASH_ALGORITHM]
 
 STATUS_FILE_WAIT_TIMEOUT = 20.0
 INACTIVITY_CHECK_INTERVAL = 1.0
@@ -57,7 +57,7 @@ aiofiles_chmod = aiofiles.os.wrap(os.chmod)  # aiofiles.os lacks chmod
 
 
 def calculate_checksum(buffer):
-    """Return checksum in the configured encoding."""
+    """Return checksum in the configured hash algorithm."""
     return checksum_constructor(buffer).digest().hex()
 
 
@@ -132,17 +132,24 @@ def raise_startup_error(exc: BaseException):
     raise exc
 
 
-def configure_checksum_encoding(encoding: str):
+def configure_hash_algorithm(algorithm: str):
     global checksum_constructor
     try:
-        checksum_constructor = CHECKSUM_ALGORITHMS[encoding]
+        checksum_constructor = HASH_ALGORITHMS[algorithm]
     except KeyError:
         raise_startup_error(
             RuntimeError(
-                f"--encoding must be one of: {', '.join(CHECKSUM_ALGORITHMS.keys())}"
+                f"--hash-algorithm must be one of: {', '.join(HASH_ALGORITHMS.keys())}"
             )
         )
-    set_checksum_encoding(encoding)
+    set_hash_algorithm(algorithm)
+
+
+def configure_lock_timeout(lock_timeout_seconds: float):
+    if lock_timeout_seconds <= 0:
+        raise_startup_error(RuntimeError("--lock-timeout must be a positive number"))
+    HashFileResponse.lock_timeout = lock_timeout_seconds
+    PrefixHashFileResponse.lock_timeout = lock_timeout_seconds
 
 
 def setup_inactivity_timeout(timeout_seconds: float, server):
@@ -242,8 +249,16 @@ if "HASHSERVER_DIRECTORY" in os.environ:
     status_file_path = None
     status_file_contents = None
     timeout_seconds = None
-    encoding = os.environ.get("HASHSERVER_ENCODING", DEFAULT_CHECKSUM_ALGORITHM)
-    configure_checksum_encoding(encoding)
+    algorithm = os.environ.get("HASHSERVER_HASH_ALGORITHM", DEFAULT_HASH_ALGORITHM)
+    configure_hash_algorithm(algorithm)
+    lock_timeout = os.environ.get("HASHSERVER_LOCK_TIMEOUT")
+    if lock_timeout is not None:
+        try:
+            configure_lock_timeout(float(lock_timeout))
+        except ValueError:
+            raise_startup_error(
+                RuntimeError("HASHSERVER_LOCK_TIMEOUT must be a number")
+            )
 
 else:
     if (
@@ -315,11 +330,17 @@ If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""
     )
 
     parser.add_argument(
-        "--encoding",
+        "--hash-algorithm",
         type=str,
-        choices=tuple(CHECKSUM_ALGORITHMS.keys()),
-        default=DEFAULT_CHECKSUM_ALGORITHM,
+        choices=tuple(HASH_ALGORITHMS.keys()),
+        default=DEFAULT_HASH_ALGORITHM,
         help="Hash algorithm used for checksum calculations (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--lock-timeout",
+        type=float,
+        default=DEFAULT_LOCK_TIMEOUT,
+        help="Wait this many seconds for stale lock files (default: %(default)s)",
     )
 
     parser.add_argument(
@@ -338,7 +359,8 @@ If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""
     directory = args.directory
     writable = args.writable
     extra_dirs = args.extra_dirs
-    configure_checksum_encoding(args.encoding)
+    configure_hash_algorithm(args.hash_algorithm)
+    configure_lock_timeout(args.lock_timeout)
     status_file_path = args.status_file
     timeout_seconds = args.timeout
     if status_file_path:

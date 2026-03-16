@@ -1,6 +1,6 @@
 import threading
 import time
-from hashlib import sha3_256
+from hashlib import sha256
 
 import requests
 
@@ -8,7 +8,7 @@ from .utils import start_server, wait_for_server
 
 
 def calculate_checksum(buffer: bytes) -> str:
-    return sha3_256(buffer).digest().hex()
+    return sha256(buffer).digest().hex()
 
 
 TEST_BUFFER = b"promise-buffer"
@@ -37,6 +37,7 @@ def test_has_reports_promised_checksum(tmp_path, available_port):
     command = [
         "hashserver",
         str(write_dir),
+        "--writable",
         "--layout",
         "flat",
         "--port",

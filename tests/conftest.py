@@ -25,7 +25,7 @@ def lorem_text() -> str:
 
 @pytest.fixture
 def lorem_checksum() -> str:
-    return "bde3f269175e1dcda13848278aa6046bd643cea85b84c8b8bb80952e70b6eae0"
+    return "2d8c2f6d978ca21712b5f6de36c9d31fa8e96a4fa5d8ff8b0188dfb9e7c171bb"
 
 
 @pytest.fixture

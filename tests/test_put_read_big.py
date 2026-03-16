@@ -1,5 +1,5 @@
 import time
-from hashlib import sha3_256
+from hashlib import sha256
 
 import requests
 
@@ -11,7 +11,7 @@ BUFFER = CHUNK * 5  # ~5 MiB
 
 
 def calculate_checksum(buffer: bytes) -> str:
-    return sha3_256(buffer).digest().hex()
+    return sha256(buffer).digest().hex()
 
 
 def test_put_read_big(tmp_path, available_port):

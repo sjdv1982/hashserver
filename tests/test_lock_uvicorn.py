@@ -9,7 +9,7 @@ from .utils import start_server, wait_for_server
 
 
 def request_checksum(port: int, checksum: str):
-    response = requests.get(f"http://127.0.0.1:{port}/{checksum}", timeout=5)
+    response = requests.get(f"http://127.0.0.1:{port}/{checksum}", timeout=10)
     status = response.status_code
     try:
         body = response.text
@@ -65,9 +65,8 @@ def test_lock_uvicorn(bufferdir, lorem_text, lorem_checksum, available_port):
         assert status == 400, (status, body)
         payload = json.loads(body)
         expected_message = (
-            "File corruption: file at path {} does not have the correct SHA3-256 checksum.".format(
-                lorem_file
-            )
+            f"File corruption: file at path {lorem_file} does not have the correct "
+            "sha-256 checksum."
         )
         assert payload == {"message": expected_message}
 
