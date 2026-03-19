@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "hashserver"
 version = "1.0"
@@ -11,14 +15,29 @@ dependencies = [
     "uvicorn[standard]",
     "typing-extensions"
 ]
+keywords = ["seamless", "content-addressed", "file server", "HTTP"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries",
+]
+
+[project.urls]
+Homepage = "https://github.com/sjdv1982/hashserver"
+Repository = "https://github.com/sjdv1982/hashserver"
+
+[project.optional-dependencies]
+dev = []
 
 [tool.setuptools]
 py-modules = ["hashserver", "hash_file_response"]
 
-
-[build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
-
 [project.scripts]
 hashserver = "hashserver:main"
+
