@@ -73,6 +73,25 @@ curl -O http://localhost:8000/$CHECKSUM
 
 To use SHA3-256 instead, start the server with `--hash-algorithm sha3-256` and hash your files with `hashlib.sha3_256`.
 
+### Status-file protocol
+
+`hashserver` does not require a status file. If `--status-file` is omitted, it runs independently.
+
+If `--status-file` is provided, the file is used for two things:
+
+1. Report the chosen port, especially when `--port-range` is used.
+2. Report whether startup succeeded (`"running"`) or failed (`"failed"`).
+
+The status-file protocol is as follows:
+
+1. Wait for the status file to exist and parse it as JSON.
+2. Reuse the existing JSON object as the base payload. An empty JSON object `{}` is sufficient.
+3. Pick or validate its listening port.
+4. On ASGI startup, rewrite the same file with `"status": "running"` and the chosen `"port"`.
+5. If startup fails before that point, rewrite the file with `"status": "failed"`.
+
+If `remote-http-launcher` is used, it may pre-populate the JSON with fields such as the PID, workdir, or `"status": "starting"`. `hashserver` preserves such fields when it writes back the final status.
+
 ## API
 
 ### Retrieving buffers
