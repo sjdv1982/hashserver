@@ -185,8 +185,8 @@ def setup_inactivity_timeout(timeout_seconds: float, server):
         INACTIVITY_STATE["server"] = None
         INACTIVITY_STATE["timeout"] = None
 
-    app.add_event_handler("startup", start_monitor)
-    app.add_event_handler("shutdown", stop_monitor)
+    app.on_event("startup")(start_monitor)
+    app.on_event("shutdown")(stop_monitor)
 
 
 def pick_random_free_port(host: str, start: int, end: int) -> int:
