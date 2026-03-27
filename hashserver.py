@@ -44,6 +44,8 @@ checksum_constructor = HASH_ALGORITHMS[DEFAULT_HASH_ALGORITHM]
 
 STATUS_FILE_WAIT_TIMEOUT = 20.0
 INACTIVITY_CHECK_INTERVAL = 1.0
+DEFAULT_RANDOM_PORT_START = 49152
+DEFAULT_RANDOM_PORT_END = 65535
 
 
 INACTIVITY_STATE = {
@@ -363,10 +365,26 @@ If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""
     configure_lock_timeout(args.lock_timeout)
     status_file_path = args.status_file
     timeout_seconds = args.timeout
+    if args.port_range:
+        start, end = args.port_range
+        try:
+            selected_port = pick_random_free_port(args.host, start, end)
+        except BaseException as exc:
+            raise_startup_error(exc)
+    elif args.port is not None:
+        selected_port = args.port
+    else:
+        try:
+            selected_port = pick_random_free_port(
+                args.host, DEFAULT_RANDOM_PORT_START, DEFAULT_RANDOM_PORT_END
+            )
+        except BaseException as exc:
+            raise_startup_error(exc)
+    args.port = selected_port
     if status_file_path:
         status_file_contents = wait_for_status_file(status_file_path)
         status_tracker = StatusFileTracker(
-            status_file_path, status_file_contents, args.port
+            status_file_path, status_file_contents, selected_port
         )
     if timeout_seconds is not None and timeout_seconds <= 0:
         raise_startup_error(RuntimeError("--timeout must be a positive number"))
@@ -377,15 +395,6 @@ If not specified, this argument is read from HASHSERVER_EXTRA_DIRS, if present""
     else:
         extra_dirs = []
     layout = args.layout
-    if args.port_range:
-        start, end = args.port_range
-        try:
-            selected_port = pick_random_free_port(args.host, start, end)
-        except BaseException as exc:
-            raise_startup_error(exc)
-    else:
-        selected_port = args.port if args.port is not None else 8000
-    args.port = selected_port
     if status_tracker:
         status_tracker.port = selected_port
 

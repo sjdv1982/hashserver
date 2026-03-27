@@ -5,6 +5,9 @@ import requests
 
 from .utils import allocate_port_range, start_server, wait_for_server
 
+DEFAULT_RANDOM_PORT_START = 49152
+DEFAULT_RANDOM_PORT_END = 65535
+
 
 def wait_for_port(process, timeout: float = 10.0):
     deadline = time.monotonic() + timeout
@@ -41,6 +44,32 @@ def test_port_range(bufferdir):
         port, captured = wait_for_port(process)
         assert port is not None, "Server did not report the selected port"
         assert start <= port <= end, port
+
+        wait_for_server(port)
+
+        response = requests.get(f"http://127.0.0.1:{port}/healthcheck", timeout=5)
+        assert response.status_code == 200, response.text
+        assert response.text == "OK"
+
+        if captured:
+            print("Initial logs:")
+            for line in captured:
+                print(line, end="")
+
+
+def test_random_port_default(bufferdir):
+    command = [
+        "hashserver",
+        str(bufferdir),
+        "--layout",
+        "flat",
+    ]
+
+    with start_server(command, text=True) as process:
+        port, captured = wait_for_port(process)
+        assert port is not None, "Server did not report the selected port"
+        assert DEFAULT_RANDOM_PORT_START <= port <= DEFAULT_RANDOM_PORT_END, port
+        assert port != 8000
 
         wait_for_server(port)
 

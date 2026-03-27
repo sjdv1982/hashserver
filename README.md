@@ -52,13 +52,13 @@ Serve buffers from a local directory:
 hashserver ./my-buffers
 ```
 
-This starts the server under uvicorn on port 8000. Run `hashserver -h` for all options.
+This starts the server under uvicorn on a random free port in the dynamic/private range (`49152-65535`). Run `hashserver -h` for all options.
 
 ### Storing and retrieving a buffer
 
 ```bash
 # Start a writable server
-hashserver ./my-buffers --writable
+hashserver ./my-buffers --writable --port 8000
 
 # Compute the SHA-256 checksum and upload
 CHECKSUM=$(python3 -c "
@@ -130,7 +130,7 @@ Requires `--writable`.
 | `--layout` | Directory layout: `prefix` or `flat` | `prefix` |
 | `--extra-dirs` | Semicolon-separated list of extra read-only buffer directories | — |
 | `--host` | Listen address | `127.0.0.1` |
-| `--port` | Listen port | `8000` |
+| `--port` | Listen port | random free port in `49152-65535` |
 | `--port-range START END` | Pick a random free port in range (mutually exclusive with `--port`) | — |
 | `--status-file` | JSON file for reporting server status | — |
 | `--timeout` | Shut down after this many seconds of inactivity | — |
