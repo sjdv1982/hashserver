@@ -73,7 +73,6 @@ class HashFileResponse(FileResponse):
         media_type: typing.Optional[str] = None,
         background: typing.Optional[BackgroundTask] = None,
         stat_result: typing.Optional[os.stat_result] = None,
-        method: typing.Optional[str] = None,
         content_disposition_type: str = "attachment",
         extra_dirs: typing.Optional[typing.List[str]] = None,
     ) -> None:
@@ -92,7 +91,6 @@ class HashFileResponse(FileResponse):
             background=background,
             filename=filename,
             stat_result=stat_result,
-            method=method,
             content_disposition_type=content_disposition_type,
         )
         self.directory = directory
@@ -209,7 +207,6 @@ class PrefixHashFileResponse(HashFileResponse):
         media_type: typing.Optional[str] = None,
         background: typing.Optional[BackgroundTask] = None,
         stat_result: typing.Optional[os.stat_result] = None,
-        method: typing.Optional[str] = None,
         content_disposition_type: str = "attachment",
         extra_dirs: typing.Optional[typing.List[str]] = None,
     ) -> None:
@@ -222,7 +219,6 @@ class PrefixHashFileResponse(HashFileResponse):
             media_type=media_type,
             background=background,
             stat_result=stat_result,
-            method=method,
             content_disposition_type=content_disposition_type,
             extra_dirs=extra_dirs,
         )
