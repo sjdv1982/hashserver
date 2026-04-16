@@ -737,13 +737,18 @@ async def healthcheck() -> Response:
 
 
 @app.get("/{checksum}")
-async def get_file(checksum: Annotated[Checksum, Path()]) -> HashFileResponse:
+async def get_file(
+    checksum: Annotated[Checksum, Path()], rq: Request
+) -> HashFileResponse:
     checksum2 = parse_checksum(checksum)
     LOGGER.info("GET %s", checksum2)
     await _wait_for_current_put_requests((checksum2,))
     ResponseClass = _response_classes_get_file[layout]
     response = ResponseClass(
-        directory=directory, checksum=checksum2, extra_dirs=extra_dirs
+        directory=directory,
+        checksum=checksum2,
+        extra_dirs=extra_dirs,
+        accept_encoding=rq.headers.get("accept-encoding"),
     )
     return response
 

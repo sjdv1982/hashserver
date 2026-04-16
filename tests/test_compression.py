@@ -32,10 +32,11 @@ def put_buffer(port: int, checksum: str, buffer: bytes, *, content_encoding=None
     return response
 
 
-def get_buffer_raw(port: int, checksum: str):
+def get_buffer_raw(port: int, checksum: str, *, headers=None):
     response = requests.get(
         f"http://127.0.0.1:{port}/{checksum}",
         stream=True,
+        headers=headers,
         timeout=10,
     )
     response.raw.decode_content = False
@@ -190,7 +191,9 @@ def test_get_prefers_compressed_when_only_compressed_exists(tmp_path, available_
         assert body == compressed
 
 
-def test_get_prefers_uncompressed_when_both_forms_exist(tmp_path, available_port):
+def test_get_prefers_uncompressed_when_identity_is_requested(
+    tmp_path, available_port
+):
     read_dir = tmp_path / "bufferdir"
     read_dir.mkdir()
     checksum = calculate_checksum(BUFFER)
@@ -203,10 +206,35 @@ def test_get_prefers_uncompressed_when_both_forms_exist(tmp_path, available_port
     with start_server(command, env=env) as _server:
         wait_for_server(available_port)
 
-        response, body = get_buffer_raw(available_port, checksum)
+        response, body = get_buffer_raw(
+            available_port, checksum, headers={"Accept-Encoding": "identity"}
+        )
         assert response.status_code == 200, body
         assert "Content-Encoding" not in response.headers
         assert body == BUFFER
+
+
+def test_get_prefers_requested_encoding_when_available(
+    tmp_path, available_port
+):
+    read_dir = tmp_path / "bufferdir"
+    read_dir.mkdir()
+    checksum = calculate_checksum(BUFFER)
+    compressed = gzip.compress(BUFFER)
+    (read_dir / checksum).write_bytes(BUFFER)
+    (read_dir / f"{checksum}.gz").write_bytes(compressed)
+
+    command, env = _readonly_server_command(read_dir, available_port)
+
+    with start_server(command, env=env) as _server:
+        wait_for_server(available_port)
+
+        response, body = get_buffer_raw(
+            available_port, checksum, headers={"Accept-Encoding": "gzip"}
+        )
+        assert response.status_code == 200, body
+        assert response.headers["Content-Encoding"] == "gzip"
+        assert body == compressed
 
 
 def test_has_and_buffer_length_recognize_compressed_form(tmp_path, available_port):

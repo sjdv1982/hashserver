@@ -72,8 +72,77 @@ class HashFileResponse(FileResponse):
     chunk_size = 640 * 1024
 
     @staticmethod
-    def _compression_candidates(path: str) -> list[tuple[str, str]]:
-        return [(path + suffix, suffix) for suffix in COMPRESSION_PREFERENCE]
+    def _parse_accept_encoding(accept_encoding: str | None) -> list[str | None]:
+        if not accept_encoding:
+            return [None] + list(COMPRESSION_PREFERENCE)
+
+        parsed: list[tuple[float, int, str | None]] = []
+        for idx, item in enumerate(accept_encoding.split(",")):
+            item = item.strip()
+            if not item:
+                continue
+            parts = [part.strip() for part in item.split(";")]
+            encoding = parts[0].lower()
+            q = 1.0
+            for param in parts[1:]:
+                if param.startswith("q="):
+                    try:
+                        q = float(param[2:])
+                    except ValueError:
+                        q = 0.0
+            if q <= 0:
+                continue
+            if encoding == "gzip":
+                parsed.append((q, idx, ".gz"))
+            elif encoding in ("zstd", "x-zstd"):
+                parsed.append((q, idx, ".zst"))
+            elif encoding == "identity":
+                parsed.append((q, idx, None))
+            elif encoding == "*":
+                parsed.append((q, idx, "*"))
+
+        parsed.sort(key=lambda item: (-item[0], item[1]))
+        ordered: list[str | None] = []
+        seen: set[str | None] = set()
+        wildcard = False
+        for _q, _idx, suffix in parsed:
+            if suffix == "*":
+                wildcard = True
+                continue
+            if suffix not in seen:
+                seen.add(suffix)
+                ordered.append(suffix)
+
+        if wildcard:
+            for suffix in [None, *COMPRESSION_PREFERENCE]:
+                if suffix not in seen:
+                    seen.add(suffix)
+                    ordered.append(suffix)
+
+        if None not in seen:
+            ordered.append(None)
+        for suffix in COMPRESSION_PREFERENCE:
+            if suffix not in seen:
+                ordered.append(suffix)
+        return ordered
+
+    def _compression_candidates(self, path: str) -> list[tuple[str, str | None]]:
+        candidates = [(path, None)] + [
+            (path + suffix, suffix) for suffix in COMPRESSION_PREFERENCE
+        ]
+        preferred_suffixes = self._parse_accept_encoding(self._accept_encoding)
+        ordered_candidates: list[tuple[str, str | None]] = []
+        seen: set[tuple[str, str | None]] = set()
+        for suffix in preferred_suffixes:
+            candidate = (path if suffix is None else path + suffix, suffix)
+            if candidate not in seen:
+                seen.add(candidate)
+                ordered_candidates.append(candidate)
+        for candidate in candidates:
+            if candidate not in seen:
+                seen.add(candidate)
+                ordered_candidates.append(candidate)
+        return ordered_candidates
 
     @staticmethod
     def _get_decompressor(suffix: str):
@@ -94,6 +163,7 @@ class HashFileResponse(FileResponse):
         stat_result: typing.Optional[os.stat_result] = None,
         content_disposition_type: str = "attachment",
         extra_dirs: typing.Optional[typing.List[str]] = None,
+        accept_encoding: typing.Optional[str] = None,
     ) -> None:
         filename = parse_checksum(checksum)
         self.prefix = filename[:2]
@@ -104,7 +174,7 @@ class HashFileResponse(FileResponse):
             path = os.path.join(directory, filename)
         self._primary_path = path
         self._compression_suffix = None
-        self._candidate_paths = self._compression_candidates(path)
+        self._accept_encoding = accept_encoding
         super().__init__(
             path=path,
             status_code=status_code,
@@ -130,8 +200,6 @@ class HashFileResponse(FileResponse):
     async def _resolve_existing_path(
         self, base_path: str
     ) -> tuple[str | None, str | None]:
-        if await anyio.Path(base_path).exists():
-            return base_path, None
         for candidate_path, suffix in self._compression_candidates(base_path):
             if await anyio.Path(candidate_path).exists():
                 return candidate_path, suffix
@@ -257,6 +325,7 @@ class PrefixHashFileResponse(HashFileResponse):
         stat_result: typing.Optional[os.stat_result] = None,
         content_disposition_type: str = "attachment",
         extra_dirs: typing.Optional[typing.List[str]] = None,
+        accept_encoding: typing.Optional[str] = None,
     ) -> None:
 
         super().__init__(
@@ -269,6 +338,7 @@ class PrefixHashFileResponse(HashFileResponse):
             stat_result=stat_result,
             content_disposition_type=content_disposition_type,
             extra_dirs=extra_dirs,
+            accept_encoding=accept_encoding,
         )
         prefix_file = os.path.join(directory, ".HASHSERVER_PREFIX")
         with open(prefix_file, mode="wb") as f:

@@ -175,7 +175,7 @@ Hashserver supports transparent compression for stored buffers. Supported format
 
 **Uploading compressed buffers:** Send `Content-Encoding: zstd` (or `gzip`) on PUT. The server streams the compressed body to disk while simultaneously decompressing to verify the canonical checksum. The compressed bytes are stored at `{dir}/{cs}.zst` (or `.gz`).
 
-**Downloading:** GET always uses the canonical checksum URL. If the stored form is compressed, the response includes `Content-Encoding: zstd` (or `gzip`). The client must check this header and decompress if present. The server does *not* honor `Accept-Encoding` — it serves whichever form it has, preferring uncompressed if both exist.
+**Downloading:** GET always uses the canonical checksum URL. If the stored form is compressed, the response includes `Content-Encoding: zstd` (or `gzip`). The client must check this header and decompress if present. The server tries to honor `Accept-Encoding` when a matching on-disk form exists; otherwise it falls back to the uncompressed file or the server's normal on-disk preference order.
 
 **Coexistence:** Compressed and uncompressed forms of the same buffer coexist safely: `{cs}`, `{cs}.zst`, `{cs}.gz` can all be present.
 
