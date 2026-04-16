@@ -167,6 +167,22 @@ In **flat** layout, the same buffer is stored as `<directory>/ab3f7c...`.
 
 Extra directories auto-detect their layout by checking for the `.HASHSERVER_PREFIX` sentinel.
 
+## Compression
+
+Hashserver supports transparent compression for stored buffers. Supported formats: Zstandard (`.zst`) and gzip (`.gz`).
+
+**Core invariant:** The URL checksum is always the canonical checksum of the *decompressed* bytes. A compressed upload of the same content produces the same URL as an uncompressed upload.
+
+**Uploading compressed buffers:** Send `Content-Encoding: zstd` (or `gzip`) on PUT. The server streams the compressed body to disk while simultaneously decompressing to verify the canonical checksum. The compressed bytes are stored at `{dir}/{cs}.zst` (or `.gz`).
+
+**Downloading:** GET always uses the canonical checksum URL. If the stored form is compressed, the response includes `Content-Encoding: zstd` (or `gzip`). The client must check this header and decompress if present. The server does *not* honor `Accept-Encoding` — it serves whichever form it has, preferring uncompressed if both exist.
+
+**Coexistence:** Compressed and uncompressed forms of the same buffer coexist safely: `{cs}`, `{cs}.zst`, `{cs}.gz` can all be present.
+
+**`/has` and `/has-now`:** Any stored form satisfies the existence check.
+
+**`/buffer-length`:** Always returns the *uncompressed* byte count. When only a compressed form exists, this is read from a `.BUFFERLENGTH` sidecar file written during the compressed PUT.
+
 ## Running tests
 
 ```bash
