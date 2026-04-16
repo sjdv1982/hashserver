@@ -9,11 +9,12 @@ description = "Simple FastAPI-based hash server"
 readme = "README.md"
 license = "MIT"
 authors = [{name = "Sjoerd de Vries"}]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [    
     "fastapi",
     "uvicorn[standard]",
-    "typing-extensions"
+    "typing-extensions",
+    "zstandard",
 ]
 keywords = ["seamless", "content-addressed", "file server", "HTTP"]
 classifiers = [
@@ -35,7 +36,7 @@ Repository = "https://github.com/sjdv1982/hashserver"
 dev = []
 
 [tool.setuptools]
-py-modules = ["hashserver", "hash_file_response"]
+py-modules = ["hashserver", "hash_file_response", "compression_utils"]
 
 [project.scripts]
 hashserver = "hashserver:main"

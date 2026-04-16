@@ -11,6 +11,7 @@ import aiofiles.os
 import aiofiles.tempfile
 import contextlib
 import copy
+import zlib
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Set, Union
 from fastapi import FastAPI, Path, Body, Request
@@ -37,6 +38,12 @@ from pydantic.functional_validators import BeforeValidator
 import anyio
 import pathlib
 import time
+import zstandard
+
+from compression_utils import (
+    COMPRESSION_PREFERENCE,
+    content_encoding_to_suffix,
+)
 
 Checksum = Annotated[str, BeforeValidator(parse_checksum)]
 
@@ -65,6 +72,54 @@ def calculate_checksum(buffer):
 
 def calculate_checksum_stream():
     return checksum_constructor()
+
+
+def _compression_candidates(path: str) -> list[tuple[str, str | None]]:
+    return [(path, None)] + [
+        (path + suffix, suffix) for suffix in COMPRESSION_PREFERENCE
+    ]
+
+
+def _get_streaming_decompressor(suffix: str):
+    if suffix == ".zst":
+        return zstandard.ZstdDecompressor().decompressobj()
+    if suffix == ".gz":
+        return zlib.decompressobj(wbits=31)
+    raise ValueError(suffix)
+
+
+async def _read_buffer_length_sidecar(path: str) -> int | None:
+    try:
+        async with await anyio.open_file(path + ".BUFFERLENGTH", mode="r") as sidecar:
+            data = await sidecar.read()
+    except FileNotFoundError:
+        return None
+    return int(data.strip())
+
+
+async def _write_buffer_length_sidecar(path: str, buffer_length: int) -> None:
+    async with await anyio.open_file(path + ".BUFFERLENGTH", mode="w") as sidecar:
+        await sidecar.write(str(buffer_length))
+
+
+async def _remove_buffer_length_sidecar(path: str) -> None:
+    try:
+        await aiofiles.os.unlink(path + ".BUFFERLENGTH")
+    except FileNotFoundError:
+        pass
+
+
+async def _stat_canonical_buffer_length(path: str, suffix: str) -> int:
+    decompressor = _get_streaming_decompressor(suffix)
+    total_length = 0
+    async with await anyio.open_file(path, mode="rb") as file:
+        while True:
+            chunk = await file.read(640 * 1024)
+            if not chunk:
+                break
+            total_length += len(decompressor.decompress(chunk))
+    total_length += len(decompressor.flush())
+    return total_length
 
 
 def wait_for_status_file(path: str, timeout: float = STATUS_FILE_WAIT_TIMEOUT):
@@ -476,6 +531,65 @@ async def buffer_length(checksums: Annotated[List[Checksum], Body()]) -> JSONRes
                 continue
             curr_results[nr] = stat.st_size
 
+    async def read_sidecars(paths):
+        futures = []
+        for _, path in paths:
+            futures.append(_read_buffer_length_sidecar(path))
+        result0 = await asyncio.gather(*futures, return_exceptions=True)
+        for (nr, _path), value in zip(paths, result0):
+            if isinstance(value, Exception) or value is None:
+                continue
+            curr_results[nr] = value
+
+    async def stat_compressed(paths):
+        futures = []
+        metadata = []
+        for nr, path in paths:
+            for candidate_path, suffix in _compression_candidates(path)[1:]:
+                metadata.append((nr, candidate_path, suffix))
+                futures.append(anyio.Path(candidate_path).exists())
+        result0 = await asyncio.gather(*futures, return_exceptions=True)
+        fallback = []
+        for (nr, candidate_path, suffix), exists in zip(metadata, result0):
+            if curr_results[nr]:
+                continue
+            if isinstance(exists, Exception) or not exists:
+                continue
+            fallback.append((nr, candidate_path, suffix))
+        if not fallback:
+            return
+        sidecar_reads = []
+        for _nr, candidate_path, suffix in fallback:
+            sidecar_reads.append(
+                _read_buffer_length_sidecar(candidate_path[: -len(suffix)])
+            )
+        sidecar_values = await asyncio.gather(*sidecar_reads, return_exceptions=True)
+        expensive = []
+        for (nr, candidate_path, suffix), sidecar_value in zip(
+            fallback, sidecar_values
+        ):
+            if curr_results[nr]:
+                continue
+            if isinstance(sidecar_value, Exception):
+                expensive.append((nr, candidate_path, suffix))
+                continue
+            if sidecar_value is None:
+                expensive.append((nr, candidate_path, suffix))
+                continue
+            curr_results[nr] = sidecar_value
+        if expensive:
+            lengths = await asyncio.gather(
+                *[
+                    _stat_canonical_buffer_length(candidate_path, suffix)
+                    for _, candidate_path, suffix in expensive
+                ],
+                return_exceptions=True,
+            )
+            for (nr, _candidate_path, _suffix), length in zip(expensive, lengths):
+                if isinstance(length, Exception):
+                    continue
+                curr_results[nr] = length
+
     paths = []
     for nr, checksum in enumerate(checksums2):
         assert isinstance(checksum, str)
@@ -487,8 +601,15 @@ async def buffer_length(checksums: Annotated[List[Checksum], Body()]) -> JSONRes
         paths.append((nr, path))
 
     await stat_all(paths)
+    unresolved_paths = [item for item in paths if not curr_results[item[0]]]
+    if unresolved_paths:
+        await read_sidecars(unresolved_paths)
+    unresolved_paths = [item for item in paths if not curr_results[item[0]]]
+    if unresolved_paths:
+        await stat_compressed(unresolved_paths)
 
     for extra_dir in extra_dirs:
+        paths = []
         for nr, checksum in enumerate(checksums2):
             if curr_results[nr]:
                 continue
@@ -497,6 +618,12 @@ async def buffer_length(checksums: Annotated[List[Checksum], Body()]) -> JSONRes
         if not len(paths):
             break
         await stat_all(paths)
+        unresolved_paths = [item for item in paths if not curr_results[item[0]]]
+        if unresolved_paths:
+            await read_sidecars(unresolved_paths)
+        unresolved_paths = [item for item in paths if not curr_results[item[0]]]
+        if unresolved_paths:
+            await stat_compressed(unresolved_paths)
 
     promised = await _promise_registry.promised_indices(checksums2)
     for idx in promised:
@@ -516,11 +643,13 @@ async def _has(checksums: List[Checksum], include_promises: bool) -> List[bool]:
 
     async def exists_all(paths):
         futures = []
-        for _, path in paths:
-            fut = anyio.Path(path).exists()
-            futures.append(fut)
+        metadata = []
+        for nr, path in paths:
+            for candidate_path, _suffix in _compression_candidates(path):
+                metadata.append((nr, candidate_path))
+                futures.append(anyio.Path(candidate_path).exists())
         result0 = await asyncio.gather(*futures, return_exceptions=True)
-        for (nr, path), exists in zip(paths, result0):
+        for (nr, _path), exists in zip(metadata, result0):
             if isinstance(exists, Exception):
                 continue
             if exists:
@@ -728,7 +857,9 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
         target_dir = os.path.join(directory, prefix)
     else:
         target_dir = directory
-    path = os.path.join(target_dir, checksum_str)
+    base_path = os.path.join(target_dir, checksum_str)
+    compression_suffix = content_encoding_to_suffix(rq.headers.get("content-encoding"))
+    path = base_path if compression_suffix is None else base_path + compression_suffix
 
     if layout == "prefix":
         target_directory = anyio.Path(target_dir)
@@ -746,6 +877,8 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
     cs_stream = calculate_checksum_stream()
     temp_path = None
     buffer_checksum = None
+    decompressed_length = 0
+    decompressor = None
     try:
         async with _current_put_condition:
             if checksum_str in _current_put_requests:
@@ -753,14 +886,28 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
                 return Response(status_code=202)
             _current_put_requests.add(checksum_str)
             added_to_put_requests = True
+        if compression_suffix is not None:
+            decompressor = _get_streaming_decompressor(compression_suffix)
         async with aiofiles.tempfile.NamedTemporaryFile(
             dir=target_dir,
             prefix=checksum_str + "-",
             delete=False,
         ) as file:
             async for chunk in rq.stream():
-                cs_stream.update(chunk)
+                if not chunk:
+                    continue
                 await file.write(chunk)
+                if decompressor is None:
+                    cs_stream.update(chunk)
+                    decompressed_length += len(chunk)
+                else:
+                    decompressed = decompressor.decompress(chunk)
+                    cs_stream.update(decompressed)
+                    decompressed_length += len(decompressed)
+            if decompressor is not None:
+                flushed = decompressor.flush()
+                cs_stream.update(flushed)
+                decompressed_length += len(flushed)
             buffer_checksum = cs_stream.hexdigest()
             temp_path = file.name
         if buffer_checksum != checksum_str:
@@ -772,6 +919,10 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
             except Exception:
                 if not await aiofiles.ospath.exists(path):
                     raise
+        if compression_suffix is None:
+            await _remove_buffer_length_sidecar(base_path)
+        else:
+            await _write_buffer_length_sidecar(base_path, decompressed_length)
         ok = True
         try:
             await aiofiles_chmod(path, 0o444)
@@ -781,6 +932,9 @@ async def put_file(checksum: Annotated[Checksum, Path()], rq: Request) -> Respon
     except ClientDisconnect:
         LOGGER.warning("PUT %s client disconnected", checksum_str)
         return Response(status_code=400)
+    except (zlib.error, zstandard.ZstdError, ValueError):
+        LOGGER.warning("PUT %s invalid compressed payload", checksum_str)
+        return Response(status_code=400, content="Invalid compressed payload")
 
     finally:
         if added_to_put_requests:

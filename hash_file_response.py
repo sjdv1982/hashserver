@@ -2,13 +2,20 @@ import os
 import stat
 import time
 import typing
+import zlib
 from hashlib import sha3_256, sha256
 
 import anyio
+import zstandard
 
 from starlette.background import BackgroundTask
 from starlette.types import Receive, Scope, Send
 from starlette.responses import FileResponse
+
+from compression_utils import (
+    COMPRESSION_PREFERENCE,
+    suffix_to_content_encoding,
+)
 
 HASH_ALGORITHMS = {
     "sha3-256": sha3_256,
@@ -64,6 +71,18 @@ class HashFileResponse(FileResponse):
     lock_timeout = 120
     chunk_size = 640 * 1024
 
+    @staticmethod
+    def _compression_candidates(path: str) -> list[tuple[str, str]]:
+        return [(path + suffix, suffix) for suffix in COMPRESSION_PREFERENCE]
+
+    @staticmethod
+    def _get_decompressor(suffix: str):
+        if suffix == ".zst":
+            return zstandard.ZstdDecompressor().decompressobj()
+        if suffix == ".gz":
+            return zlib.decompressobj(wbits=31)
+        raise ValueError(suffix)
+
     def __init__(
         self,
         checksum: str,
@@ -83,6 +102,9 @@ class HashFileResponse(FileResponse):
             path = os.path.join(directory, self.prefix, filename)
         else:
             path = os.path.join(directory, filename)
+        self._primary_path = path
+        self._compression_suffix = None
+        self._candidate_paths = self._compression_candidates(path)
         super().__init__(
             path=path,
             status_code=status_code,
@@ -105,16 +127,36 @@ class HashFileResponse(FileResponse):
             extra_dirs_layout[extra_dir] = layout
         self.extra_dirs_layout = extra_dirs_layout
 
+    async def _resolve_existing_path(
+        self, base_path: str
+    ) -> tuple[str | None, str | None]:
+        if await anyio.Path(base_path).exists():
+            return base_path, None
+        for candidate_path, suffix in self._compression_candidates(base_path):
+            if await anyio.Path(candidate_path).exists():
+                return candidate_path, suffix
+        return None, None
+
     async def refresh_stat_headers(self):
-        if self.extra_dirs and not await anyio.Path(self.path).exists():
+        resolved_path, compression_suffix = await self._resolve_existing_path(
+            self._primary_path
+        )
+        if resolved_path is not None:
+            self.path = resolved_path
+            self._compression_suffix = compression_suffix
+        elif self.extra_dirs:
             for extra_dir in self.extra_dirs:
                 layout = self.extra_dirs_layout[extra_dir]
                 if layout == "prefix":
-                    path0 = os.path.join(extra_dir, self.prefix, self.filename)
+                    base_path = os.path.join(extra_dir, self.prefix, self.filename)
                 else:
-                    path0 = os.path.join(extra_dir, self.filename)
-                if await anyio.Path(path0).exists():
-                    self.path = path0
+                    base_path = os.path.join(extra_dir, self.filename)
+                resolved_path, compression_suffix = await self._resolve_existing_path(
+                    base_path
+                )
+                if resolved_path is not None:
+                    self.path = resolved_path
+                    self._compression_suffix = compression_suffix
                     break
 
         try:
@@ -155,12 +197,21 @@ class HashFileResponse(FileResponse):
     async def calculate_checksum(self):
         """Return checksum for the configured algorithm."""
         checksum = _hash_constructor()
+        decompressor = None
+        if self._compression_suffix is not None:
+            decompressor = self._get_decompressor(self._compression_suffix)
         async with await anyio.open_file(self.path, mode="rb") as file:
             more_body = True
             while more_body:
                 chunk = await file.read(self.chunk_size)
-                checksum.update(chunk)
+                if decompressor is None:
+                    checksum.update(chunk)
+                else:
+                    checksum.update(decompressor.decompress(chunk))
                 more_body = len(chunk) == self.chunk_size
+
+            if decompressor is not None:
+                checksum.update(decompressor.flush())
 
             checksum = checksum.digest().hex()
         return checksum
@@ -173,6 +224,11 @@ class HashFileResponse(FileResponse):
                 await self.until_no_lock()
                 stat_result = await self.refresh_stat_headers()
             self.stat_result = stat_result
+
+        if self._compression_suffix is not None:
+            content_encoding = suffix_to_content_encoding(self._compression_suffix)
+            if content_encoding is not None:
+                self.headers["content-encoding"] = content_encoding
 
         checksum = await self.calculate_checksum()
         if checksum != self.filename:
