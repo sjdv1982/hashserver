@@ -22,7 +22,7 @@ However, **hashserver has no dependency on Seamless** and no knowledge of it. It
 
 - **Content-addressed**: buffers are stored and retrieved by their cryptographic checksum.
 - **Configurable hash algorithm**: SHA-256 (default) or SHA3-256, selected at startup.
-- **Integrity-verified reads**: every buffer is re-checksummed on GET to detect corruption.
+- **Integrity-verified reads**: every buffer (if not compressed) is re-checksummed on GET to detect corruption.
 - **Prefix directory layout**: by default, buffers are stored under a two-character prefix subdirectory (e.g. `ab/ab3f7c...`) to avoid filesystem performance problems with large flat directories. A flat layout is also supported.
 - **Extra read-only directories**: additional buffer directories can be mounted as fallback read sources.
 - **Promises**: a client can announce that a buffer will be uploaded soon via `PUT /promise/{checksum}`. Other clients reading that checksum will wait for the upload rather than getting a 404.

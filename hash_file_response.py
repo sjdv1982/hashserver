@@ -197,21 +197,12 @@ class HashFileResponse(FileResponse):
     async def calculate_checksum(self):
         """Return checksum for the configured algorithm."""
         checksum = _hash_constructor()
-        decompressor = None
-        if self._compression_suffix is not None:
-            decompressor = self._get_decompressor(self._compression_suffix)
         async with await anyio.open_file(self.path, mode="rb") as file:
             more_body = True
             while more_body:
                 chunk = await file.read(self.chunk_size)
-                if decompressor is None:
-                    checksum.update(chunk)
-                else:
-                    checksum.update(decompressor.decompress(chunk))
+                checksum.update(chunk)
                 more_body = len(chunk) == self.chunk_size
-
-            if decompressor is not None:
-                checksum.update(decompressor.flush())
 
             checksum = checksum.digest().hex()
         return checksum
@@ -230,16 +221,17 @@ class HashFileResponse(FileResponse):
             if content_encoding is not None:
                 self.headers["content-encoding"] = content_encoding
 
-        checksum = await self.calculate_checksum()
-        if checksum != self.filename:
-            await self.until_no_lock()
-            stat_result = await self.refresh_stat_headers()
-            self.stat_result = stat_result
-            checksum2 = await self.calculate_checksum()
-            if checksum2 != self.filename:
-                raise RuntimeError(
-                    f"File corruption: file at path {self.path} does not have the correct {_current_hash_algorithm} checksum."
-                )
+        if self._compression_suffix is None:
+            checksum = await self.calculate_checksum()
+            if checksum != self.filename:
+                await self.until_no_lock()
+                stat_result = await self.refresh_stat_headers()
+                self.stat_result = stat_result
+                checksum2 = await self.calculate_checksum()
+                if checksum2 != self.filename:
+                    raise RuntimeError(
+                        f"File corruption: file at path {self.path} does not have the correct {_current_hash_algorithm} checksum."
+                    )
 
         await super().__call__(scope=scope, receive=receive, send=send)
 
