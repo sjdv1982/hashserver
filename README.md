@@ -192,4 +192,4 @@ pytest tests/
 
 ## License
 
-See [LICENSE.txt](LICENSE.txt).
+MIT. See [LICENSE.txt](LICENSE.txt).
