@@ -1024,6 +1024,9 @@ if as_commandline_tool:
     print("OK")
     try:
         server.run()
+    except KeyboardInterrupt:
+        # Normal interactive shutdown path (CTRL+C / forwarded SIGINT).
+        pass
     except BaseException:
         if status_tracker and not status_tracker.running_written:
             status_tracker.write_failed()
