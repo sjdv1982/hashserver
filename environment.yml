@@ -6,6 +6,8 @@ dependencies:
   - fastapi
   - uvicorn
   - uvicorn-standard
+  - typing-extensions
+  - zstandard
   - pip
   - pip:
       - -e .
