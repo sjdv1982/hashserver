@@ -10,7 +10,8 @@ readme = "README.md"
 license = "MIT"
 authors = [{name = "Sjoerd de Vries"}]
 requires-python = ">=3.10"
-dependencies = [    
+dependencies = [
+    "aiofiles",
     "fastapi",
     "uvicorn[standard]",
     "typing-extensions",
